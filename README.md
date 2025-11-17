@@ -1,4 +1,5 @@
-# Empty Project Template
+# Auction
+# Priyash Singh Chandara - Setting project structure, implementing Auction class design.
 
 Inside your project you should have the following structure:
 ## At the top level:
