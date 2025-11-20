@@ -1,6 +1,8 @@
 import java.io.*;
+import java.net.InetAddress;
 import java.net.ServerSocket;
 import java.net.Socket;
+import java.net.UnknownHostException;
 
 
 /**
@@ -57,5 +59,47 @@ public class NetworkServer {
             throw new IOException("Server is not running");
         }
         return serverSocket.accept();
+    }
+    /**
+     * Returns the local port number that this server is bound to.
+     *
+     * @return the local TCP port, or {@code -1} if the server socket is not initialized
+     */
+    public int getPort() {
+        return serverSocket.getLocalPort();
+    }
+
+    /**
+     * Returns the IP address of the local host that this server is running on.
+     * <p>
+     * This is typically used by clients to connect to the server when all
+     * components run on the same machine or local network.
+     *
+     * @return the string representation of the local host address (for example, {@code "127.0.0.1"})
+     * @throws UnknownHostException if the local host name could not be resolved into an address
+     */
+    public String getHost() throws UnknownHostException {
+        return InetAddress.getLocalHost().getHostAddress();
+    }
+
+    /**
+     * Indicates whether the server is currently marked as running.
+     * <p>
+     * Note that this flag is independent of the underlying socket state; it simply
+     * reflects whether {@link #start()} has been called without a subsequent {@link #stop()}.
+     *
+     * @return {@code true} if the server is marked as running, {@code false} otherwise
+     */
+    public boolean isRunning() {
+        return running;
+    }
+
+    /**
+     * Indicates whether the underlying {@link ServerSocket} has been closed.
+     *
+     * @return {@code true} if the server socket is closed, {@code false} otherwise
+     */
+    public boolean isClosed() {
+        return serverSocket.isClosed();
     }
 }
