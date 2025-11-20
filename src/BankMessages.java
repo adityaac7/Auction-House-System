@@ -39,4 +39,41 @@ public class BankMessages {
             this.auctionHouses = auctionHouses;
         }
     }
+
+    /**
+     * Request sent by an Auction House to register.
+     * Includes connection details so Agents can find it.
+     */
+    public static class RegisterAuctionHouseRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public String host;
+        public int port;
+
+        public RegisterAuctionHouseRequest(String host, int port) {
+            super("REGISTER_AUCTION_HOUSE");
+            this.host = host;
+            this.port = port;
+        }
+    }
+
+    /**
+     * Response to Auction House registration.
+     * Returns the assigned Auction House ID.
+     */
+    public static class RegisterAuctionHouseResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public int auctionHouseId;
+        public int accountNumber;
+        public String message;
+
+        public RegisterAuctionHouseResponse(boolean success, int auctionHouseId,
+                                            int accountNumber, String message) {
+            super("REGISTER_AUCTION_HOUSE_RESPONSE");
+            this.success = success;
+            this.auctionHouseId = auctionHouseId;
+            this.accountNumber = accountNumber;
+            this.message = message;
+        }
+    }
 }
