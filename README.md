@@ -1,56 +1,55 @@
-# Auction
-# Priyash Singh Chandara - Setting project structure, implementing Auction class design.
+# CS 351 Project 5: Distributed Auction System
 
-Inside your project you should have the following structure:
-## At the top level:
-### README.md
-This file right here. Make sure you edit it to describe your project.
-### .gitignore
-This file tells git which files to you should not track with version control.
-You may want to add additional file patterns depending on your operating system and tools that you are using.
-### Jar file(s)
-Executable jar file(s) with all resources needed to run.
+### Group Members
+* **Utshab Niraula**
+* **Sushant Bogati**
+* **Priyash Chandara**
+* **Aditya Chauhan**
 
-## src/ folder
-This contains your source code, organized into one or more packages.
+## Project Overview
+For Project 5, our group is building a distributed auction system. The basic idea is to have three different programs that talk to each other over the network using TCP sockets:
 
-## docs/ folder
-Includes all documentation other than this README file.
-You must at least include your object design diagram here.
+1.  **Bank Server:** This runs the whole time and keeps track of everyone's money and accounts. It also handles the Auction Houses registering. We are making sure it's thread-safe so money doesn't get messed up.
+2.  **Auction House:** This is kind of in the middle. It acts like a client when it talks to the Bank (to check funds), but it acts like a server for the Agents (bidders). It holds the items and runs the auctions.
+3.  **Agent:** This is the program the user runs to bid on things. It connects to the Bank to get an account and then connects to an Auction House to start bidding.
 
-### Object design diagram
+## Who Did What (So Far)
+We just started and split up the initial work to get the project repo going:
 
-The object design document should be in PDF format.
-First page/slide is object diagram, with description of objects on the next page(s).
+* **Utshab Niraula:** Uploaded the initial code for the project. This included the skeleton classes for `BankServer`, `AuctionHouse`, `Agent`, and `ItemManager` so we all had a base to work off of. Currently working on the code for the Bank.
+* **Sushant Bogati:** Wrote the `NetworkServer` class. This is a helper class to handle the server socket stuff so we don't have to write it twice for the Bank and Auction House. He is working on adding this to the Auction House code now.
+* **Priyash Chandara:** Set up the GitHub Classroom group and repo. Also pushed the first `README.md` file to get us started. Right now, he is working on the Agent code and how the user types in commands.
+* **Aditya Chauhan:** He is handling the design part. He is writing the `design/cs351project5_design.pdf` and talking with the group to figure out exactly what messages we need to send back and forth.
 
-On more complicated projects, you may need additional diagrams to
-clearly describe subcomponents.
+## How It Works
+We are using Java Sockets for everything. Since multiple people are going to be connecting at the same time, we have to handle threads carefully:
+* **Bank:** Uses `synchronized` blocks so two people can't touch the same account at once.
+* **Auction House:** Uses locks on items so bids don't conflict.
 
-### Other documentation
+If you want to see the diagrams and exact protocols, check the design PDF in the design folder.
 
-If you found it useful to document your projects in other ways (class
-diagrams, algorithm description, tables of events, etc.) put the
-documents here.
+## Directory Structure
+Here is what our project folder looks like right now:
 
-## resources/ folder
+```text
+CS351-Auction/
+├── README.md           # This file
+├── .gitignore          
+├── design/             
+│   └── cs351project5_design.pdf
+└── src/                
+    ├── Agent.java
+    ├── AuctionHouse.java
+    ├── BankServer.java
+    ├── BankClient.java
+    ├── ItemManager.java
+    ├── NetworkServer.java
+    └── [Other helper classes...]
 
-This is an optional folder that you'll include if you are using any
-resource files (sounds, images, etc.)
+```
+## Current Status
+We have the main structure set up.
 
-These are files that you would include within your jar file when you build it.
-Files that are separate from the program (input/output test files, scripts, etc.) should be in a separate folder.
+Done: Added NetworkServer.java and the main class files. Design doc is in progress.
 
-## Other folders
-Keep the top level of the repository from being too cluttered by using additional subfolders for test files, config files, scripts, etc.
-Be sure to document the purpose of the folder(s) in this README file. You may also want to add a README.md to a subfolder if there is a lot to explain.
-
-I will sometimes add additional directories of test files to the project templates I provide you.
-
-## .github/ folder
-This folder may be automatically generated by the Github Classroom bot and updated when we change the autograder settings.
-You should not change anything here, but you may need to pull the changes from the server before you will be able to push your own code.
-
-## .gitkeep files
-Git only tracks actual files, so if you want to track a directory, you have to put a file in it.
-An empty .gitkeep file (it could be named anything, but this is a common naming convention) is added to a directory that we want to track so that it is no longer empty.
-You can safely remove a .gitkeep file once the directory has other files in it, but I occasionally use them in template repositories like this one to make sure we're using the same folder names.
+Doing: Working on connecting the NetworkServer to the Bank and Auction House and making sure the threads work properly.
