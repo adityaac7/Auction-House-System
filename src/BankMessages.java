@@ -131,4 +131,34 @@ public class BankMessages {
             this.message = message;
         }
     }
+
+    /**
+     * Request to permanently transfer blocked funds to another account.
+     * Used when an auction is won.
+     */
+    public static class TransferFundsRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public int fromAccount;
+        public int toAccount;
+        public double amount;
+
+        public TransferFundsRequest(int fromAccount, int toAccount, double amount) {
+            super("TRANSFER_FUNDS");
+            this.fromAccount = fromAccount;
+            this.toAccount = toAccount;
+            this.amount = amount;
+        }
+    }
+
+    public static class TransferFundsResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public String message;
+
+        public TransferFundsResponse(boolean success, String message) {
+            super("TRANSFER_FUNDS_RESPONSE");
+            this.success = success;
+            this.message = message;
+        }
+    }
 }
