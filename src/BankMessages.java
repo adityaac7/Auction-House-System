@@ -76,4 +76,59 @@ public class BankMessages {
             this.message = message;
         }
     }
+
+    /**
+     * Request to block funds for a pending bid.
+     * Ensures the Agent has enough money before the bid is accepted.
+     */
+    public static class BlockFundsRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public int accountNumber;
+        public double amount;
+
+        public BlockFundsRequest(int accountNumber, double amount) {
+            super("BLOCK_FUNDS");
+            this.accountNumber = accountNumber;
+            this.amount = amount;
+        }
+    }
+
+    public static class BlockFundsResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public String message;
+
+        public BlockFundsResponse(boolean success, String message) {
+            super("BLOCK_FUNDS_RESPONSE");
+            this.success = success;
+            this.message = message;
+        }
+    }
+
+    /**
+     * Request to unblock funds (e.g., when an Agent is outbid).
+     */
+    public static class UnblockFundsRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public int accountNumber;
+        public double amount;
+
+        public UnblockFundsRequest(int accountNumber, double amount) {
+            super("UNBLOCK_FUNDS");
+            this.accountNumber = accountNumber;
+            this.amount = amount;
+        }
+    }
+
+    public static class UnblockFundsResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public String message;
+
+        public UnblockFundsResponse(boolean success, String message) {
+            super("UNBLOCK_FUNDS_RESPONSE");
+            this.success = success;
+            this.message = message;
+        }
+    }
 }
