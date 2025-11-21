@@ -1,17 +1,43 @@
 import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * The Auction House.
  * Acts as a Client to the Bank and a Server to Agents.
  */
 public class AuctionHouse {
+        private final int auctionHouseId;
+        private int auctionHouseAccountNumber;
+        private final String bankHost;
+        private final int bankPort;
+
+       //private final Map<Integer, AuctionItem> items = new ConcurrentHashMap<>();
+       // private final Map<Integer, NetworkClient> agentConnections = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
-        // TODO: Handle command line args for Bank Host/Port
+        if (args.length < 3) {
+            System.out.println("Usage: java AuctionHouse [HouseId] [Bank_Host] [Bank_Port]");
+            return;
+        }
 
-        AuctionHouse house = new AuctionHouse();
+        int auctionHouseId = Integer.parseInt(args[0]);
+        String bankHost = args[1];
+        int bankPort = Integer.parseInt(args[2]);
+
+        AuctionHouse house = new AuctionHouse(auctionHouseId, bankHost, bankPort);
         house.start();
     }
+
+    public AuctionHouse(int auctionHouseId, String bankHost, int bankPort) {
+        this.auctionHouseId = auctionHouseId;
+        this.bankHost = bankHost;
+        this.bankPort = bankPort;
+        this.auctionHouseAccountNumber = -1;
+        System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Created for bank "
+                + bankHost + ":" + bankPort);
+    }
+
 
     private void start() {
         try {
