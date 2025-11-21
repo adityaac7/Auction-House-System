@@ -161,4 +161,89 @@ public class BankMessages {
             this.message = message;
         }
     }
+
+    /**
+     * Request to get current balance and blocked funds.
+     * Used to update the Client GUI.
+     */
+    public static class GetAccountInfoRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public int accountNumber;
+
+        public GetAccountInfoRequest(int accountNumber) {
+            super("GET_ACCOUNT_INFO");
+            this.accountNumber = accountNumber;
+        }
+    }
+
+    public static class GetAccountInfoResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public double totalBalance;
+        public double availableFunds;
+        public double blockedFunds;
+        public String message;
+
+        public GetAccountInfoResponse(boolean success, double totalBalance,
+                                      double availableFunds, double blockedFunds, String message) {
+            super("GET_ACCOUNT_INFO_RESPONSE");
+            this.success = success;
+            this.totalBalance = totalBalance;
+            this.availableFunds = availableFunds;
+            this.blockedFunds = blockedFunds;
+            this.message = message;
+        }
+    }
+
+    /**
+     * Request to close an account and disconnect.
+     */
+    public static class DeregisterRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public int accountNumber;
+        public String accountType; // "AGENT" or "AUCTION_HOUSE"
+
+        public DeregisterRequest(int accountNumber, String accountType) {
+            super("DEREGISTER");
+            this.accountNumber = accountNumber;
+            this.accountType = accountType;
+        }
+    }
+
+    public static class DeregisterResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public String message;
+
+        public DeregisterResponse(boolean success, String message) {
+            super("DEREGISTER_RESPONSE");
+            this.success = success;
+            this.message = message;
+        }
+    }
+
+    /**
+     * Request to refresh the list of available Auction Houses.
+     */
+    public static class GetAuctionHousesRequest extends Message {
+        private static final long serialVersionUID = 1L;
+        public GetAuctionHousesRequest() {
+            super("GET_AUCTION_HOUSES");
+        }
+    }
+
+    public static class GetAuctionHousesResponse extends Message {
+        private static final long serialVersionUID = 1L;
+        public boolean success;
+        public AuctionHouseInfo[] auctionHouses;
+        public String message;
+
+        public GetAuctionHousesResponse(boolean success, AuctionHouseInfo[] auctionHouses,
+                                        String message) {
+            super("GET_AUCTION_HOUSES_RESPONSE");
+            this.success = success;
+            this.auctionHouses = auctionHouses;
+            this.message = message;
+        }
+    }
 }
