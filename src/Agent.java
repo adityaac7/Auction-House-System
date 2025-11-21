@@ -2,6 +2,13 @@
  * The Bidding Agent (Client).
  * Connects to Bank for funds and AuctionHouse to bid.
  */
+
+import java.io.IOException;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
+
 public class Agent {
 
     public static void main(String[] args) {
@@ -12,10 +19,12 @@ public class Agent {
 
         String name = args[0];
         String host = args[1];
-        int port = Integer.parseInt(args[2]);
+        int bankPort = Integer.parseInt(args[2]);
+        double initialBalance = 1000.0;
+
 
         Agent agent = new Agent(name);
-        agent.run(host, port);
+        agent.run(host, bankPort);
     }
 
     private String name;
