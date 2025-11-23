@@ -13,7 +13,6 @@ public class Bank {
     private Map<Integer, AuctionHouseInfo> auctionHouses;
 
     // Helper to map a Bank Account Number -> Auction House ID
-    // We need this so when an Auction House deregisters by account number, we know which ID to remove.
     private Map<Integer, Integer> auctionHouseAccountToId;
 
     private int nextAccountNumber;
@@ -36,7 +35,6 @@ public class Bank {
 
         System.out.println("[BANK] Registered Agent: " + agentName + " (Acct: " + accountNumber + ")");
 
-        // We send the list of active auction houses so the agent knows who to connect to immediately
         AuctionHouseInfo[] auctionHousesArray =
                 auctionHouses.values().toArray(new AuctionHouseInfo[0]);
 
@@ -61,7 +59,7 @@ public class Bank {
         AuctionHouseInfo info = new AuctionHouseInfo(auctionHouseId, host, port);
         auctionHouses.put(auctionHouseId, info);
 
-        // Remember mapping from account -> auction house id for later lookup
+        // Remember mapping from account -> auction house id
         auctionHouseAccountToId.put(accountNumber, auctionHouseId);
 
         System.out.println("[BANK] Registered AH " + auctionHouseId + " at " + host + ":" + port);
@@ -71,35 +69,21 @@ public class Bank {
                 "Auction house registered successfully");
     }
 
-    /**
-     * Attempt to block funds for a bid.
-     * This is called when an Auction House receives a bid.
-     */
     public BankMessages.BlockFundsResponse blockFunds(int accountNumber, double amount) {
         BankAccount account = accounts.get(accountNumber);
-
-        // Safety check: Does the account exist?
         if (account == null) {
             return new BankMessages.BlockFundsResponse(false, "Account not found");
         }
 
-        // Try to block the funds using the thread-safe method in BankAccount
         boolean success = account.blockFunds(amount);
-
         if (success) {
             System.out.println("[BANK] Blocked $" + amount + " for Acct " + accountNumber);
-        } else {
-            System.out.println("[BANK] Failed to block $" + amount + " for Acct " + accountNumber + " (Insufficient funds)");
         }
 
         return new BankMessages.BlockFundsResponse(success,
                 success ? "Funds blocked" : "Insufficient funds");
     }
 
-    /**
-     * Unblocks funds.
-     * Usually called when an agent is outbid and needs their money back.
-     */
     public BankMessages.UnblockFundsResponse unblockFunds(int accountNumber, double amount) {
         BankAccount account = accounts.get(accountNumber);
         if (account == null) {
@@ -111,31 +95,74 @@ public class Bank {
         return new BankMessages.UnblockFundsResponse(true, "Funds unblocked");
     }
 
-    /**
-     * Transfers funds from one account to another.
-     * This moves money from 'Blocked' status in the sender's account to the receiver's total balance.
-     */
     public BankMessages.TransferFundsResponse transferFunds(int fromAccount,
                                                             int toAccount,
                                                             double amount) {
         BankAccount from = accounts.get(fromAccount);
         BankAccount to = accounts.get(toAccount);
-
-        // Verify both accounts exist before processing
         if (from == null || to == null) {
             return new BankMessages.TransferFundsResponse(false, "Account not found");
         }
 
-        // 1. Try to take the money from the sender (must be blocked first)
         boolean success = from.transferFunds(amount);
-
         if (success) {
-            // 2. If successful, deposit into the receiver
             to.deposit(amount);
             System.out.println("[BANK] Transferred $" + amount + " from " + fromAccount + " to " + toAccount);
             return new BankMessages.TransferFundsResponse(true, "Transfer successful");
         } else {
             return new BankMessages.TransferFundsResponse(false, "Insufficient blocked funds");
         }
+    }
+
+    /**
+     * Retrieves account balance info for the GUI.
+     */
+    public BankMessages.GetAccountInfoResponse getAccountInfo(int accountNumber) {
+        BankAccount account = accounts.get(accountNumber);
+        if (account == null) {
+            return new BankMessages.GetAccountInfoResponse(
+                    false, 0, 0, 0, "Account not found");
+        }
+
+        return new BankMessages.GetAccountInfoResponse(
+                true,
+                account.getTotalBalance(),
+                account.getAvailableFunds(),
+                account.getBlockedFunds(),
+                "Success");
+    }
+
+    /**
+     * Handles user disconnection.
+     * If an Auction House leaves, we must remove it from the list so Agents stop trying to connect.
+     */
+    public BankMessages.DeregisterResponse deregister(int accountNumber,
+                                                      String accountType) {
+        // Special handling for Auction Houses: remove from the public list
+        if ("AUCTION_HOUSE".equals(accountType)) {
+            Integer auctionHouseId = auctionHouseAccountToId.remove(accountNumber);
+            if (auctionHouseId != null) {
+                auctionHouses.remove(auctionHouseId);
+            }
+        }
+
+        // Remove the bank account from memory
+        BankAccount account = accounts.remove(accountNumber);
+        if (account != null) {
+            System.out.println("[BANK] Deregistered " + accountType + " " + accountNumber);
+            return new BankMessages.DeregisterResponse(true, "Deregistered");
+        } else {
+            return new BankMessages.DeregisterResponse(false, "Account not found");
+        }
+    }
+
+    /**
+     * Returns a list of all active Auction Houses.
+     */
+    public BankMessages.GetAuctionHousesResponse getAuctionHouses() {
+        AuctionHouseInfo[] auctionHousesArray =
+                auctionHouses.values().toArray(new AuctionHouseInfo[0]);
+        return new BankMessages.GetAuctionHousesResponse(
+                true, auctionHousesArray, "Success");
     }
 }
