@@ -1,6 +1,8 @@
 package bank;
 
 import common.Message;
+import messages.BankMessages;
+
 import java.io.*;
 import java.net.Socket;
 
@@ -26,16 +28,22 @@ public class BankClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            // Continuous loop to process messages
             while (!socket.isClosed()) {
                 try {
                     Message message = (Message) in.readObject();
 
-                    // TODO: Implement message handling logic here
-                    System.out.println("[BANK HANDLER] Received message type: " + message.getMessageType());
+                    // Handle the message and get a response
+                    Message response = handleMessage(message);
 
+                    // Send response back
+                    if (response != null) {
+                        synchronized (out) {
+                            out.writeObject(response);
+                            out.flush();
+                        }
+                    }
                 } catch (EOFException e) {
-                    break; // Client disconnected
+                    break;
                 }
             }
         } catch (IOException | ClassNotFoundException e) {
@@ -43,6 +51,22 @@ public class BankClientHandler implements Runnable {
         } finally {
             closeConnection();
         }
+    }
+
+    /**
+     * Routes incoming messages. Currently supports Registration only.
+     */
+    private Message handleMessage(Message message) {
+        if (message instanceof BankMessages.RegisterAgentRequest) {
+            BankMessages.RegisterAgentRequest req = (BankMessages.RegisterAgentRequest) message;
+            return bank.registerAgent(req.agentName, req.initialBalance);
+
+        } else if (message instanceof BankMessages.RegisterAuctionHouseRequest) {
+            BankMessages.RegisterAuctionHouseRequest req = (BankMessages.RegisterAuctionHouseRequest) message;
+            return bank.registerAuctionHouse(req.host, req.port);
+        }
+
+        return null; // Unknown message
     }
 
     private void closeConnection() {
