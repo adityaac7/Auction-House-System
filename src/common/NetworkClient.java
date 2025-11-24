@@ -30,4 +30,16 @@ public class NetworkClient {
         this.out.flush();
         this.in = new ObjectInputStream(socket.getInputStream());
     }
+    /**
+     * Constructs a {@code NetworkClient} from an existing connection and existing streams.
+     * Useful for wrapping an accepted server-side socket with pre-initialized streams.
+     * @param socket the underlying socket
+     * @param out    the active {@link ObjectOutputStream} for writing
+     * @param in     the active {@link ObjectInputStream} for reading
+     */
+    public NetworkClient(Socket socket, ObjectOutputStream out, ObjectInputStream in) {
+        this.socket = socket;
+        this.out = out;
+        this.in = in;
+    }
 }
