@@ -42,4 +42,31 @@ public class NetworkClient {
         this.out = out;
         this.in = in;
     }
+    /**
+     * Serializes and sends a {@link Message} object to the remote server or client.
+     * This method is thread-safe; callers can safely send from multiple threads.
+     * @param message the {@code Message} to send; must be {@link Serializable}
+     * @throws IOException if the underlying output stream fails
+     */
+    public void sendMessage(Message message) throws IOException {
+        synchronized (writeLock) {
+            out.writeObject(message);
+            out.flush();
+        }
+    }
+    /**
+     * Reads and returns the next {@link Message} object from the remote peer.
+     * <p>
+     * This method blocks until a message arrives or the stream/socket closes.
+     * Thread-safe; may be called concurrently with {@link #sendMessage(Message)}.
+     *
+     * @return the deserialized {@code Message} object received
+     * @throws IOException if the stream is closed or a network error occurs
+     * @throws ClassNotFoundException if the received object type is unknown
+     */
+    public Message receiveMessage() throws IOException, ClassNotFoundException {
+        synchronized (readLock) {
+            return (Message) in.readObject();
+        }
+    }
 }
