@@ -56,10 +56,8 @@ public class NetworkClient {
     }
     /**
      * Reads and returns the next {@link Message} object from the remote peer.
-     * <p>
      * This method blocks until a message arrives or the stream/socket closes.
      * Thread-safe; may be called concurrently with {@link #sendMessage(Message)}.
-     *
      * @return the deserialized {@code Message} object received
      * @throws IOException if the stream is closed or a network error occurs
      * @throws ClassNotFoundException if the received object type is unknown
@@ -68,5 +66,23 @@ public class NetworkClient {
         synchronized (readLock) {
             return (Message) in.readObject();
         }
+    }
+
+    /**
+     * Closes the underlying connection and both object streams.
+     * @throws IOException if there is an error closing the socket or streams
+     */
+    public void close() throws IOException {
+        if (socket != null && !socket.isClosed()) {
+            socket.close();
+        }
+    }
+
+    /**
+     * Checks whether the underlying connection is open and usable.
+     * @return {@code true} if the socket is connected and not closed, {@code false} otherwise
+     */
+    public boolean isConnected() {
+        return socket != null && socket.isConnected() && !socket.isClosed();
     }
 }
