@@ -99,5 +99,105 @@ public class Agent {
             }
         });
     }
+    /**
+     * Starts a dedicated thread for listening for notifications on the given auction house connection.
+     * Automatically restarts on connection loss or errors (with retry).
+     * Only one thread runs per auction house.
+     * @param auctionHouseId the auction house to listen to
+     */
+    public void startListeningForNotifications(int auctionHouseId) {
+        // Stop existing listener if present
+        Thread existingThread = listenerThreads.get(auctionHouseId);
+        if (existingThread != null && existingThread.isAlive()) {
+            existingThread.interrupt();
+        }
+
+        Thread listenerThread = new Thread(() -> {
+            int retries = 0;
+            while (retries < 3 && !Thread.currentThread().isInterrupted()) {
+                try {
+                    NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
+                    if (connection == null) {
+                        System.out.println("[AGENT] No connection to auction house "
+                                + auctionHouseId);
+                        return;
+                    }
+
+                    System.out.println("[AGENT] Started listening for notifications from auction house "
+                            + auctionHouseId);
+
+                    while (connection.isConnected()
+                            && !Thread.currentThread().isInterrupted()) {
+                        try {
+                            Message message = connection.receiveMessage();
+                            if (message instanceof AuctionMessages.BidStatusNotification) {
+                                AuctionMessages.BidStatusNotification n =
+                                        (AuctionMessages.BidStatusNotification) message;
+                                System.out.println("[AGENT] Notification for item "
+                                        + n.itemId + ": "
+                                        + n.status + " - "
+                                        + n.message);
+                                if (uiCallback != null) {
+                                    uiCallback.onBidStatusChanged(
+                                            n.itemId, n.status, n.message);
+                                }
+                                // If we won, perform bank transfer then confirm
+                                if ("WINNER".equals(n.status)) {
+                                    confirmWinner(auctionHouseId,
+                                            n.itemId,
+                                            n.finalPrice,
+                                            n.auctionHouseAccountNumber,
+                                            n.itemDescription);
+                                }
+                            } else {
+                                // Route message into response queue for RPC-style calls
+                                BlockingQueue<Message> queue =
+                                        responseQueues.get(auctionHouseId);
+                                if (queue != null) {
+                                    queue.offer(message);
+                                } else {
+                                    System.out.println(
+                                            "[AGENT] Dropping message type "
+                                                    + message.getMessageType()
+                                                    + " - no response queue for AH "
+                                                    + auctionHouseId);
+                                }
+                            }
+                        } catch (IOException e) {
+                            System.out.println("[AGENT] Connection lost to auction house "
+                                    + auctionHouseId);
+                            break;
+                        } catch (ClassNotFoundException e) {
+                            System.out.println("[AGENT] Invalid message received from auction house "
+                                    + auctionHouseId + ": "
+                                    + e.getMessage());
+                        }
+                    }
+
+                    return; // exit loop if connection closed
+
+                } catch (Exception e) {
+                    retries++;
+                    System.out.println("[AGENT] Error listening for notifications (attempt "
+                            + retries + "/3): " + e.getMessage());
+                    if (retries >= 3) {
+                        System.out.println("[AGENT] Failed to maintain connection after 3 attempts");
+                        return;
+                    }
+                    try {
+                        Thread.sleep(1000);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
+                }
+            }
+        });
+
+        listenerThread.setDaemon(false);
+        listenerThread.setName("Listener-AH-" + auctionHouseId);
+        listenerThreads.put(auctionHouseId, listenerThread);
+        listenerThread.start();
+    }
 
 }
