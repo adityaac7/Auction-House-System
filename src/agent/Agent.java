@@ -325,5 +325,39 @@ public class Agent {
             }
         }
     }
+    /**
+     * Fetches updated account information from the bank and notifies the UI callback.
+     */
+    public void updateBalance() {
+        try {
+            BankMessages.GetAccountInfoRequest request =
+                    new BankMessages.GetAccountInfoRequest(accountNumber);
+            bankClient.sendMessage(request);
+            BankMessages.GetAccountInfoResponse response =
+                    (BankMessages.GetAccountInfoResponse) bankClient.receiveMessage();
+            if (response.success) {
+                synchronized (balanceLock) {
+                    this.totalBalance = response.totalBalance;
+                    this.availableFunds = response.availableFunds;
+                    this.blockedFunds = response.blockedFunds;
+                }
+                System.out.println("[AGENT] Balance updated - Total: $"
+                        + totalBalance + ", Available: $"
+                        + availableFunds + ", Blocked: $"
+                        + blockedFunds);
+                if (uiCallback != null) {
+                    uiCallback.onBalanceUpdated(
+                            totalBalance, availableFunds, blockedFunds);
+                }
+            } else {
+                System.out.println("[AGENT] Failed to update balance: "
+                        + response.message);
+            }
+        } catch (IOException e) {
+            System.out.println("[AGENT] Failed to update balance: " + e.getMessage());
+        } catch (ClassNotFoundException e) {
+            System.out.println("[AGENT] Invalid balance response: " + e.getMessage());
+        }
+    }
 
 }
