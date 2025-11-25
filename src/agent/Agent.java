@@ -256,5 +256,74 @@ public class Agent {
             return response.items;
         }
     }
+    /**
+     * Places a bid on the specified item at the specified auction house.
+     * Sends a PlaceBid request and waits for the response.
+     * @param auctionHouseId which auction house to send the bid to
+     * @param itemId         which item to bid on
+     * @param bidAmount      how much to bid
+     * @return true if bid is accepted, false if rejected
+     * @throws IOException if communication fails
+     * @throws ClassNotFoundException if server reply is invalid
+     */
+    public boolean placeBid(int auctionHouseId,
+                            int itemId,
+                            double bidAmount)
+            throws IOException, ClassNotFoundException {
+        NetworkClient connection = auctionHouseConnections.computeIfAbsent(
+                auctionHouseId,
+                id -> {
+                    try {
+                        AuctionHouseInfo info = auctionHouses.get(id);
+                        if (info == null) {
+                            throw new RuntimeException("Auction house not found");
+                        }
+                        NetworkClient c = new NetworkClient(info.host, info.port);
+                        responseQueues.putIfAbsent(id, new LinkedBlockingQueue<>());
+                        System.out.println("[AGENT] Connected to auction house " + id
+                                + " at " + info.host + ":" + info.port);
+                        return c;
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to connect: "
+                                + e.getMessage(), e);
+                    }
+                });
+
+        BlockingQueue<Message> queue =
+                responseQueues.computeIfAbsent(auctionHouseId,
+                        id -> new LinkedBlockingQueue<>());
+
+        synchronized (connection) {
+            AuctionMessages.PlaceBidRequest request =
+                    new AuctionMessages.PlaceBidRequest(itemId, accountNumber, bidAmount);
+            connection.sendMessage(request);
+
+            Message msg;
+            try {
+                msg = queue.take();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for bid response", e);
+            }
+
+            if (!(msg instanceof AuctionMessages.PlaceBidResponse)) {
+                throw new IOException("Unexpected response type: "
+                        + msg.getClass().getSimpleName());
+            }
+
+            AuctionMessages.PlaceBidResponse response =
+                    (AuctionMessages.PlaceBidResponse) msg;
+
+            if (response.success && "ACCEPTED".equals(response.status)) {
+                System.out.println("[AGENT] Bid placed: Item " + itemId
+                        + " for $" + bidAmount);
+                updateBalance();
+                return true;
+            } else {
+                System.out.println("[AGENT] Bid rejected: " + response.message);
+                return false;
+            }
+        }
+    }
 
 }
