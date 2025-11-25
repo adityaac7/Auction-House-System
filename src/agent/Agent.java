@@ -5,6 +5,7 @@ import common.AuctionHouseInfo;
 import common.AuctionItem; // If using items
 import common.Message;
 import common.NetworkClient;
+import messages.AuctionMessages;
 import messages.BankMessages;
 
 import java.io.IOException;
@@ -198,6 +199,62 @@ public class Agent {
         listenerThread.setName("Listener-AH-" + auctionHouseId);
         listenerThreads.put(auctionHouseId, listenerThread);
         listenerThread.start();
+    }
+    /**
+     * Returns the item list from an auction house.
+     * Opens a connection and sends a GetItems request, waiting for the response.
+     * @param auctionHouseId ID for the auction house to query
+     * @return array of {@link AuctionItem} available at that house
+     * @throws IOException if an I/O or connection failure occurs
+     * @throws ClassNotFoundException if the server response is invalid
+     */
+    public AuctionItem[] getItemsFromAuctionHouse(int auctionHouseId)
+            throws IOException, ClassNotFoundException {
+        NetworkClient connection = auctionHouseConnections.computeIfAbsent(
+                auctionHouseId,
+                id -> {
+                    try {
+                        AuctionHouseInfo info = auctionHouses.get(id);
+                        if (info == null) {
+                            throw new RuntimeException("Auction house not found");
+                        }
+                        NetworkClient c = new NetworkClient(info.host, info.port);
+                        responseQueues.putIfAbsent(id, new LinkedBlockingQueue<>());
+                        System.out.println("[AGENT] Connected to auction house " + id
+                                + " at " + info.host + ":" + info.port);
+                        return c;
+                    } catch (IOException e) {
+                        throw new RuntimeException("Failed to connect: "
+                                + e.getMessage(), e);
+                    }
+                });
+
+        BlockingQueue<Message> queue =
+                responseQueues.computeIfAbsent(auctionHouseId,
+                        id -> new LinkedBlockingQueue<>());
+
+        synchronized (connection) {
+            AuctionMessages.GetItemsRequest request =
+                    new AuctionMessages.GetItemsRequest();
+            connection.sendMessage(request);
+
+            Message msg;
+            try {
+                msg = queue.take();
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while waiting for items", e);
+            }
+
+            if (!(msg instanceof AuctionMessages.GetItemsResponse)) {
+                throw new IOException("Unexpected response type: "
+                        + msg.getClass().getSimpleName());
+            }
+
+            AuctionMessages.GetItemsResponse response =
+                    (AuctionMessages.GetItemsResponse) msg;
+            return response.items;
+        }
     }
 
 }
