@@ -13,23 +13,21 @@ For Project 5, our group is building a distributed auction system. The basic ide
 2.  **Auction House:** This is kind of in the middle. It acts like a client when it talks to the Bank (to check funds), but it acts like a server for the Agents (bidders). It holds the items and runs the auctions.
 3.  **Agent:** This is the program the user runs to bid on things. It connects to the Bank to get an account and then connects to an Auction House to start bidding.
 
-## Who Did What (So Far)
-We just started and split up the initial work to get the project repo going:
+## Who Is Doing What
+We split the work up by component to keep things organized:
 
-* **Utshab Niraula:** Uploaded the initial code for the project. This included the skeleton classes for `BankServer`, `AuctionHouse`, `Agent`, and `ItemManager` so we all had a base to work off of. Currently working on the code for the Bank.
-* **Sushant Bogati:** Wrote the `NetworkServer` class. This is a helper class to handle the server socket stuff so we don't have to write it twice for the Bank and Auction House. He is working on adding this to the Auction House code now.
-* **Priyash Chandara:** Set up the GitHub Classroom group and repo. Also pushed the first `README.md` file to get us started. Right now, he is working on the Agent code and how the user types in commands.
-* **Aditya Chauhan:** He is handling the design part. He is writing the `design/cs351project5_design.pdf` and talking with the group to figure out exactly what messages we need to send back and forth.
+* **Utshab Niraula (Bank Backend):** I am working on the Bank. So far, I've implemented the `Bank` logic, the thread-safe `BankAccount` class, and the `BankClientHandler` to handle incoming connections. I also defined the `BankMessages` protocol so everyone knows how to talk to the bank.
+* **Sushant Bogati (Agent Client):** Sushant is working on the Agent logic. He is building the client that connects to the bank, handles the user's balance, and eventually will handle the bidding loop.
+* **Priyash Chandara (Auction House Server):** Priyash is handling the Auction House logic. He is working on the `ItemManager` (locking items for bids) and the `AuctionHouseServer` that listens for Agents to connect.
+* **Aditya Chauhan (GUI & Frontend):** Aditya is in charge of the visual part. Once our backend logic is solid, he is going to build the JavaFX applications (`BankApplication`, `AgentApplication`, etc.) so we have a nice interface instead of just console text.
 
-## How It Works
-We are using Java Sockets for everything. Since multiple people are going to be connecting at the same time, we have to handle threads carefully:
-* **Bank:** Uses `synchronized` blocks so two people can't touch the same account at once.
-* **Auction House:** Uses locks on items so bids don't conflict.
-
-If you want to see the diagrams and exact protocols, check the design PDF in the design folder.
+## Architecture & Design
+The system is built on a strict Client-Server model using Java Sockets. Thread safety is a core priority:
+* **Bank:** Uses `synchronized` methods in `BankAccount.java` to prevent race conditions when blocking or transferring funds.
+* **Auction House:** Uses `ReentrantLocks` on items to ensure two people can't bid on the same item at the exact same microsecond.
 
 ## Directory Structure
-Here is what our project folder looks like right now:
+We recently refactored the code into packages to keep it clean:
 
 ```text
 CS351-Auction/
@@ -38,18 +36,26 @@ CS351-Auction/
 ├── design/             
 │   └── cs351project5_design.pdf
 └── src/                
-    ├── Agent.java
-    ├── AuctionHouse.java
-    ├── BankServer.java
-    ├── BankClient.java
-    ├── ItemManager.java
-    ├── NetworkServer.java
-    └── [Other helper classes...]
+    ├── bank/           # Bank logic & Server
+    │   ├── Bank.java
+    │   ├── BankServer.java
+    │   └── BankClientHandler.java
+    ├── agent/          # Agent logic
+    │   └── Agent.java
+    ├── auctionhouse/   # Auction House logic
+    │   ├── AuctionHouse.java
+    │   └── ItemManager.java
+    ├── common/         # Shared files (NetworkServer, AuctionItem)
+    └── messages/       # Protocol definitions (BankMessages, etc.)
 
 ```
+
 ## Current Status
-We have the main structure set up.
+* Done:
+* Bank backend is functional (Accounts, logic, message routing).
+* Network protocols are defined.
+* Project structure is organized into packages.
 
-Done: Added NetworkServer.java and the main class files. Design doc is in progress.
-
-Doing: Working on connecting the NetworkServer to the Bank and Auction House and making sure the threads work properly.
+* Doing:
+* Connecting the Agent and Auction House logic to the network using the new package structure.
+* Drafting the JavaFX GUI screens.
