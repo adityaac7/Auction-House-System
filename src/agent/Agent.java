@@ -359,5 +359,49 @@ public class Agent {
             System.out.println("[AGENT] Invalid balance response: " + e.getMessage());
         }
     }
+    /**
+     * Disconnects cleanly from all auction houses and the bank.
+     * Interrupts notification listeners, closes sockets, and notifies the bank of deregistration.
+     */
+    public void disconnect() {
+        System.out.println("[AGENT] Disconnecting...");
+
+        // Interrupt all listener threads
+        for (Thread thread : listenerThreads.values()) {
+            if (thread != null && thread.isAlive()) {
+                thread.interrupt();
+            }
+        }
+        listenerThreads.clear();
+
+        // Close auction house connections
+        for (NetworkClient connection : auctionHouseConnections.values()) {
+            try {
+                if (connection != null) {
+                    connection.close();
+                }
+            } catch (IOException e) {
+                System.out.println("[AGENT] Error closing connection: "
+                        + e.getMessage());
+            }
+        }
+        auctionHouseConnections.clear();
+        responseQueues.clear();
+
+        // Deregister with bank
+        if (bankClient != null) {
+            try {
+                BankMessages.DeregisterRequest request =
+                        new BankMessages.DeregisterRequest(accountNumber, "AGENT");
+                bankClient.sendMessage(request);
+                bankClient.receiveMessage();
+                bankClient.close();
+                System.out.println("[AGENT] Disconnected from system");
+            } catch (IOException | ClassNotFoundException e) {
+                System.out.println("[AGENT] Error during deregistration: "
+                        + e.getMessage());
+            }
+        }
+    }
 
 }
