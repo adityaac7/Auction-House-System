@@ -1,5 +1,8 @@
 package agent;
 
+import common.AuctionHouseInfo;
+import common.AuctionItem;
+
 import java.io.IOException;
 import java.util.Random;
 /**
@@ -22,5 +25,75 @@ public class AutomatedAgent {
         System.out.println("[AUTO AGENT] Created: " + agentName);
         System.out.println("[AUTO AGENT] Bid Interval: " + bidInterval + "ms");
         System.out.println("[AUTO AGENT] Bid Multiplier: " + bidMultiplier);
+    }
+    public void start() {
+        running = true;
+
+        Thread biddingThread = new Thread(() -> {
+            try {
+                // Connect to all auction houses
+                AuctionHouseInfo[] auctionHouses = agent.getAuctionHouses();
+                for (AuctionHouseInfo house : auctionHouses) {
+                    agent.connectToAuctionHouse(house.auctionHouseId);
+                    agent.startListeningForNotifications(house.auctionHouseId);
+                }
+
+                System.out.println("[AUTO AGENT] Connected to "
+                        + auctionHouses.length + " auction houses");
+
+                // Continuously bid on items
+                while (running) {
+                    try {
+                        if (auctionHouses.length > 0) {
+                            // Select a random auction house
+                            AuctionHouseInfo selectedHouse =
+                                    auctionHouses[random.nextInt(auctionHouses.length)];
+
+                            // Get items from the auction house
+                            AuctionItem[] items = agent.getItemsFromAuctionHouse(
+                                    selectedHouse.auctionHouseId);
+                            if (items.length > 0) {
+                                // Select a random item
+                                AuctionItem selectedItem =
+                                        items[random.nextInt(items.length)];
+
+                                double bidAmount = calculateBidAmount(selectedItem);
+
+                                // Check if we have enough available funds
+                                if (agent.getAvailableFunds() >= bidAmount) {
+                                    agent.placeBid(
+                                            selectedHouse.auctionHouseId,
+                                            selectedItem.itemId,
+                                            bidAmount);
+                                } else {
+                                    System.out.println(
+                                            "[AUTO AGENT] Insufficient funds for bid");
+                                }
+                            }
+                        }
+
+                        Thread.sleep(bidInterval);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (Exception e) {
+                        System.out.println("[AUTO AGENT] Error during bidding: "
+                                + e.getMessage());
+                        try {
+                            Thread.sleep(bidInterval);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                }
+            } catch (Exception e) {
+                System.out.println("[AUTO AGENT] Error: " + e.getMessage());
+                e.printStackTrace();
+            }
+        });
+
+        biddingThread.setDaemon(true);
+        biddingThread.start();
     }
 }
