@@ -35,10 +35,37 @@ public class Agent {
     // auctionHouseId -> queue of non-notification responses
     private Map<Integer, BlockingQueue<Message>> responseQueues;
 
+    private AgentUICallback uiCallback;
+
     private volatile double totalBalance;
     private volatile double availableFunds;
     private volatile double blockedFunds;
     private final Object balanceLock = new Object();
+    // Purchases list for "My Purchases" view
+    public static class Purchase {
+        public final int auctionHouseId;
+        public final int itemId;
+        public final String description;
+        public final double price;
+
+        public Purchase(int auctionHouseId, int itemId,
+                        String description, double price) {
+            this.auctionHouseId = auctionHouseId;
+            this.itemId = itemId;
+            this.description = description;
+            this.price = price;
+        }
+    }
+
+    private final List<Purchase> purchases =
+            Collections.synchronizedList(new ArrayList<>());
+
+    public interface AgentUICallback {
+        void onBalanceUpdated(double total, double available, double blocked);
+        void onItemsUpdated(AuctionItem[] items);
+        void onBidStatusChanged(int itemId, String status, String message);
+        default void onPurchasesUpdated(List<Purchase> purchases) { }
+    }
 
 
     public Agent(String agentName, double initialBalance, String bankHost, int bankPort)
@@ -517,6 +544,58 @@ public class Agent {
         } catch (IOException | ClassNotFoundException e) {
             System.out.println("[AGENT] Error confirming winner: " + e.getMessage());
         }
+    }
+    /**
+     * Sets the UI callback for this agent. Used to notify the controller/view layer about updates.
+     * @param callback UI callback
+     */
+    public void setUICallback(AgentUICallback callback) {
+        this.uiCallback = callback;
+    }
+
+    /** @return this agent's unique bank account number */
+    public int getAccountNumber() { return accountNumber; }
+
+    /** @return this agent's display name */
+    public String getAgentName() { return agentName; }
+
+    /** @return current total balance from the bank (including available and blocked) */
+    public double getTotalBalance() {
+        synchronized (balanceLock) {
+            return totalBalance;
+        }
+    }
+
+    /** @return current available balance (not blocked) */
+    public double getAvailableFunds() {
+        synchronized (balanceLock) {
+            return availableFunds;
+        }
+    }
+
+    /** @return total funds currently blocked in active bids */
+    public double getBlockedFunds() {
+        synchronized (balanceLock) {
+            return blockedFunds;
+        }
+    }
+
+    /**
+     * Returns a copy of the purchases made so far by this agent.
+     * @return list of past winning purchases
+     */
+    public List<Purchase> getPurchases() {
+        synchronized (purchases) {
+            return new ArrayList<>(purchases);
+        }
+    }
+
+    /**
+     * Gets the set of auction houses currently known/advertised by the bank.
+     * @return array of {@link AuctionHouseInfo}
+     */
+    public AuctionHouseInfo[] getAuctionHouses() {
+        return auctionHouses.values().toArray(new AuctionHouseInfo[0]);
     }
 }
 
