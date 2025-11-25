@@ -403,5 +403,120 @@ public class Agent {
             }
         }
     }
+    /**
+     * Refreshes the known set of auction houses by querying the bank.
+     * Replaces the current auctionHouses cache with updated information.
+     */
+    public void refreshAuctionHouses() {
+        try {
+            BankMessages.GetAuctionHousesRequest request =
+                    new BankMessages.GetAuctionHousesRequest();
+            bankClient.sendMessage(request);
+            BankMessages.GetAuctionHousesResponse response =
+                    (BankMessages.GetAuctionHousesResponse) bankClient.receiveMessage();
+            if (response.success) {
+                auctionHouses.clear();
+                for (AuctionHouseInfo info : response.auctionHouses) {
+                    auctionHouses.put(info.auctionHouseId, info);
+                }
+                System.out.println("[AGENT] Refreshed auction houses: "
+                        + auctionHouses.size());
+            } else {
+                System.out.println("[AGENT] Failed to refresh auction houses: "
+                        + response.message);
+            }
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println("[AGENT] Failed to refresh auction houses: "
+                    + e.getMessage());
+        }
+    }
 
+    /**
+     * Agent-initiated funds transfer and winner confirmation after winning an auction.
+     * Not public API; invoked internally after a WINNER notification.
+     * @param auctionHouseId Auction house ID
+     * @param itemId         Item ID
+     * @param finalPrice     Winning price
+     * @param auctionHouseAccountNumber Auction house's bank account
+     * @param itemDescription Item description for purchase tracking
+     */
+    private void confirmWinner(int auctionHouseId,
+                               int itemId,
+                               double finalPrice,
+                               int auctionHouseAccountNumber,
+                               String itemDescription) {
+        try {
+            // 1) Ask BANK to transfer blocked funds
+            BankMessages.TransferFundsRequest transferRequest =
+                    new BankMessages.TransferFundsRequest(
+                            accountNumber,
+                            auctionHouseAccountNumber,
+                            finalPrice);
+            bankClient.sendMessage(transferRequest);
+            BankMessages.TransferFundsResponse transferResponse =
+                    (BankMessages.TransferFundsResponse) bankClient.receiveMessage();
+
+            if (!transferResponse.success) {
+                System.out.println("[AGENT] Failed to transfer funds for item "
+                        + itemId + ": " + transferResponse.message);
+                return;
+            }
+
+            // 2) Notify auction house that transfer is done
+            NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
+            if (connection == null) {
+                System.out.println("[AGENT] No connection to confirm winner");
+                return;
+            }
+
+            BlockingQueue<Message> queue =
+                    responseQueues.computeIfAbsent(auctionHouseId,
+                            id -> new LinkedBlockingQueue<>());
+
+            System.out.println("[AGENT] Confirming winner for item "
+                    + itemId + " after bank transfer...");
+
+            synchronized (connection) {
+                AuctionMessages.ConfirmWinnerRequest request =
+                        new AuctionMessages.ConfirmWinnerRequest(
+                                itemId, accountNumber);
+                connection.sendMessage(request);
+
+                Message msg;
+                try {
+                    msg = queue.take();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.out.println("[AGENT] Interrupted while waiting for confirmWinner response");
+                    return;
+                }
+
+                if (!(msg instanceof AuctionMessages.ConfirmWinnerResponse)) {
+                    System.out.println("[AGENT] Unexpected confirmWinner response type: "
+                            + msg.getClass().getSimpleName());
+                    return;
+                }
+
+                AuctionMessages.ConfirmWinnerResponse response =
+                        (AuctionMessages.ConfirmWinnerResponse) msg;
+                if (response.success) {
+                    System.out.println("[AGENT] Winner confirmed for item "
+                            + itemId + " (" + itemDescription + ")");
+                    // Record purchase
+                    purchases.add(new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice));
+                    if (uiCallback != null) {
+                        uiCallback.onPurchasesUpdated(getPurchases());
+                    }
+                    updateBalance();
+                } else {
+                    System.out.println("[AGENT] Auction house refused to confirm winner: "
+                            + response.message);
+                }
+            }
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println("[AGENT] Error confirming winner: " + e.getMessage());
+        }
+    }
 }
+
