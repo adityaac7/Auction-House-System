@@ -19,7 +19,7 @@ public class AuctionHouse {
         private final int bankPort;
 
        //private final Map<Integer, AuctionItem> items = new ConcurrentHashMap<>();
-       // private final Map<Integer, NetworkClient> agentConnections = new ConcurrentHashMap<>();
+       // private final Map<Integer, common.NetworkClient> agentConnections = new ConcurrentHashMap<>();
 
     public static void main(String[] args) {
         if (args.length < 3) {
