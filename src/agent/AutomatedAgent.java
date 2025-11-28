@@ -96,4 +96,19 @@ public class AutomatedAgent {
         biddingThread.setDaemon(true);
         biddingThread.start();
     }
+    private double calculateBidAmount(AuctionItem item) {
+        if (item == null) {
+            throw new IllegalArgumentException("Item cannot be null");
+        }
+
+        if (item.currentBid <= 0) {
+            // First bid: near minimum
+            return item.minimumBid
+                    + random.nextDouble() * item.minimumBid * 0.5;
+        } else {
+            // Increase current bid
+            return item.currentBid * bidMultiplier
+                    + random.nextDouble() * item.minimumBid * 0.1;
+        }
+    }
 }
