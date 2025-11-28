@@ -244,91 +244,6 @@ public class Agent {
         }
     }
 
-    /**
-     * Agent-initiated transfer + winner confirmation.
-     */
-    private void confirmWinner(int auctionHouseId, int itemId, double finalPrice, int auctionHouseAccountNumber,
-                               String itemDescription) {
-        try {
-            // 1) Ask BANK to transfer blocked funds
-            BankMessages.TransferFundsRequest transferRequest =
-                    new BankMessages.TransferFundsRequest(
-                            accountNumber,
-                            auctionHouseAccountNumber,
-                            finalPrice);
-            bankClient.sendMessage(transferRequest);
-            BankMessages.TransferFundsResponse transferResponse =
-                    (BankMessages.TransferFundsResponse) bankClient.receiveMessage();
-
-            if (!transferResponse.success) {
-                System.out.println("[AGENT] Failed to transfer funds for item "
-                        + itemId + ": " + transferResponse.message);
-                return;
-            }
-
-            // 2) Notify auction house that transfer is done
-            NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
-            if (connection == null) {
-                System.out.println("[AGENT] No connection to confirm winner");
-                return;
-            }
-
-            if (!connection.isConnected()) {  //  Additional check
-                System.out.println("[AGENT] Connection closed, cannot confirm winner");
-                return;
-            }
-
-            BlockingQueue<Message> queue = responseQueues.get(auctionHouseId);
-            if (queue == null) {  // Check before using
-                System.out.println("[AGENT] No response queue for auction house " + auctionHouseId);
-                return;
-            }
-
-            System.out.println("[AGENT] Confirming winner for item "
-                    + itemId + " after bank transfer...");
-
-            synchronized (connection) {
-                AuctionMessages.ConfirmWinnerRequest request =
-                        new AuctionMessages.ConfirmWinnerRequest(
-                                itemId, accountNumber);
-                connection.sendMessage(request);
-
-                Message msg;
-                try {
-                    msg = queue.take();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    System.out.println("[AGENT] Interrupted while waiting for confirmWinner response");
-                    return;
-                }
-
-                if (!(msg instanceof AuctionMessages.ConfirmWinnerResponse)) {
-                    System.out.println("[AGENT] Unexpected confirmWinner response type: "
-                            + msg.getClass().getSimpleName());
-                    return;
-                }
-
-                AuctionMessages.ConfirmWinnerResponse response =
-                        (AuctionMessages.ConfirmWinnerResponse) msg;
-                if (response.success) {
-                    System.out.println("[AGENT] Winner confirmed for item "
-                            + itemId + " (" + itemDescription + ")");
-                    // Record purchase
-                    purchases.add(new Purchase(
-                            auctionHouseId, itemId, itemDescription, finalPrice));
-                    if (uiCallback != null) {
-                        uiCallback.onPurchasesUpdated(getPurchases());
-                    }
-                    updateBalance();
-                } else {
-                    System.out.println("[AGENT] Auction house refused to confirm winner: "
-                            + response.message);
-                }
-            }
-        } catch (IOException | ClassNotFoundException e) {
-            System.out.println("[AGENT] Error confirming winner: " + e.getMessage());
-        }
-    }
 
     /**
      * Returns the item list from an auction house.
@@ -568,10 +483,7 @@ public class Agent {
      * @param auctionHouseAccountNumber Auction house's bank account
      * @param itemDescription Item description for purchase tracking
      */
-    private void confirmWinner(int auctionHouseId,
-                               int itemId,
-                               double finalPrice,
-                               int auctionHouseAccountNumber,
+    private void confirmWinner(int auctionHouseId, int itemId, double finalPrice, int auctionHouseAccountNumber,
                                String itemDescription) {
         try {
             // 1) Ask BANK to transfer blocked funds
