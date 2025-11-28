@@ -111,4 +111,72 @@ public class AutomatedAgent {
                     + random.nextDouble() * item.minimumBid * 0.1;
         }
     }
+    public void stop() {
+        running = false;
+        agent.disconnect();
+        System.out.println("[AUTO AGENT] Stopped");
+    }
+
+    public static void main(String[] args) {
+        String agentName = "AutoBot";
+        double initialBalance = 5000;
+        String bankHost = "localhost";
+        int bankPort = 5000; //match BankServer default port
+        long bidInterval = 5000;  // 5 seconds
+        double bidMultiplier = 1.15; // 15% increase per bid
+
+        // Parse command line arguments
+        for (int i = 0; i < args.length; i++) {
+            if (args[i].equals("-n") || args[i].equals("--name")) {
+                if (i + 1 < args.length) {
+                    agentName = args[i + 1];
+                    i++;
+                }
+            } else if (args[i].equals("-b") || args[i].equals("--balance")) {
+                if (i + 1 < args.length) {
+                    initialBalance = Double.parseDouble(args[i + 1]);
+                    i++;
+                }
+            } else if (args[i].equals("-bh") || args[i].equals("--bank-host")) {
+                if (i + 1 < args.length) {
+                    bankHost = args[i + 1];
+                    i++;
+                }
+            } else if (args[i].equals("-bp") || args[i].equals("--bank-port")) {
+                if (i + 1 < args.length) {
+                    bankPort = Integer.parseInt(args[i + 1]);
+                    i++;
+                }
+            } else if (args[i].equals("-i") || args[i].equals("--interval")) {
+                if (i + 1 < args.length) {
+                    bidInterval = Long.parseLong(args[i + 1]);
+                    i++;
+                }
+            } else if (args[i].equals("-m") || args[i].equals("--multiplier")) {
+                if (i + 1 < args.length) {
+                    bidMultiplier = Double.parseDouble(args[i + 1]);
+                    i++;
+                }
+            }
+        }
+
+        try {
+            AutomatedAgent agent = new AutomatedAgent(
+                    agentName, initialBalance, bankHost, bankPort,
+                    bidInterval, bidMultiplier);
+            agent.start();
+
+            // Keep the agent running until interrupted
+            Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                System.out.println("\n[AUTO AGENT] Shutting down...");
+                agent.stop();
+            }));
+
+            // Wait indefinitely
+            Thread.currentThread().join();
+        } catch (IOException | InterruptedException | ClassNotFoundException e) {
+            System.err.println("Error starting automated agent: " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 }
