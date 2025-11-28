@@ -41,6 +41,7 @@ public class Agent {
     private volatile double availableFunds;
     private volatile double blockedFunds;
     private final Object balanceLock = new Object();
+
     // Purchases list for "My Purchases" view
     public static class Purchase {
         public final int auctionHouseId;
@@ -57,14 +58,17 @@ public class Agent {
         }
     }
 
-    private final List<Purchase> purchases =
-            Collections.synchronizedList(new ArrayList<>());
+    private final List<Purchase> purchases = Collections.synchronizedList(new ArrayList<>());
 
     public interface AgentUICallback {
         void onBalanceUpdated(double total, double available, double blocked);
+
         void onItemsUpdated(AuctionItem[] items);
+
         void onBidStatusChanged(int itemId, String status, String message);
-        default void onPurchasesUpdated(List<Purchase> purchases) { }
+
+        default void onPurchasesUpdated(List<Purchase> purchases) {
+        }
     }
 
 
@@ -103,9 +107,11 @@ public class Agent {
             throw new IOException("Failed to register agent: " + response.message);
         }
     }
+
     /**
      * Opens a connection and prepares a response queue for the given auction house.
      * Does nothing if already connected.
+     *
      * @param auctionHouseId ID of the auction house to connect to
      * @throws IOException if unable to connect
      */
@@ -127,18 +133,25 @@ public class Agent {
             }
         });
     }
+
     /**
      * Starts a dedicated thread for listening for notifications on the given auction house connection.
      * Automatically restarts on connection loss or errors (with retry).
      * Only one thread runs per auction house.
+     *
      * @param auctionHouseId the auction house to listen to
      */
     public void startListeningForNotifications(int auctionHouseId) {
-        // Stop existing listener if present
+        // Stop and wait for existing listener to terminate
         Thread existingThread = listenerThreads.get(auctionHouseId);
         if (existingThread != null && existingThread.isAlive()) {
-            existingThread.interrupt();
+            System.out.println("[AGENT] Listener already running for auction house "
+                    + auctionHouseId);
+            return; // Don't restart
         }
+
+        // Remove any dead thread from map
+        listenerThreads.remove(auctionHouseId);
 
         Thread listenerThread = new Thread(() -> {
             int retries = 0;
@@ -158,37 +171,34 @@ public class Agent {
                             && !Thread.currentThread().isInterrupted()) {
                         try {
                             Message message = connection.receiveMessage();
+
                             if (message instanceof AuctionMessages.BidStatusNotification) {
                                 AuctionMessages.BidStatusNotification n =
                                         (AuctionMessages.BidStatusNotification) message;
                                 System.out.println("[AGENT] Notification for item "
-                                        + n.itemId + ": "
-                                        + n.status + " - "
-                                        + n.message);
+                                        + n.itemId + ": " + n.status + " - " + n.message);
                                 if (uiCallback != null) {
                                     uiCallback.onBidStatusChanged(
                                             n.itemId, n.status, n.message);
                                 }
-                                // If we won, perform bank transfer then confirm
                                 if ("WINNER".equals(n.status)) {
-                                    confirmWinner(auctionHouseId,
-                                            n.itemId,
-                                            n.finalPrice,
-                                            n.auctionHouseAccountNumber,
-                                            n.itemDescription);
+                                    confirmWinner(auctionHouseId, n.itemId, n.finalPrice,
+                                            n.auctionHouseAccountNumber, n.itemDescription);
                                 }
                             } else {
-                                // Route message into response queue for RPC-style calls
                                 BlockingQueue<Message> queue =
                                         responseQueues.get(auctionHouseId);
                                 if (queue != null) {
-                                    queue.offer(message);
+                                    try {
+                                        queue.put(message);
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
                                 } else {
-                                    System.out.println(
-                                            "[AGENT] Dropping message type "
-                                                    + message.getMessageType()
-                                                    + " - no response queue for AH "
-                                                    + auctionHouseId);
+                                    System.out.println("[AGENT] WARNING: Dropping message type "
+                                            + message.getMessageType()
+                                            + " - no response queue for AH " + auctionHouseId);
                                 }
                             }
                         } catch (IOException e) {
@@ -197,12 +207,11 @@ public class Agent {
                             break;
                         } catch (ClassNotFoundException e) {
                             System.out.println("[AGENT] Invalid message received from auction house "
-                                    + auctionHouseId + ": "
-                                    + e.getMessage());
+                                    + auctionHouseId + ": " + e.getMessage());
                         }
                     }
 
-                    return; // exit loop if connection closed
+                    return;
 
                 } catch (Exception e) {
                     retries++;
@@ -222,11 +231,105 @@ public class Agent {
             }
         });
 
-        listenerThread.setDaemon(false);
+        listenerThread.setDaemon(true);  //  Use daemon threads for cleanup
         listenerThread.setName("Listener-AH-" + auctionHouseId);
         listenerThreads.put(auctionHouseId, listenerThread);
         listenerThread.start();
+
+        // Give the thread a moment to start before returning
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
+
+    /**
+     * Agent-initiated transfer + winner confirmation.
+     */
+    private void confirmWinner(int auctionHouseId, int itemId, double finalPrice, int auctionHouseAccountNumber,
+                               String itemDescription) {
+        try {
+            // 1) Ask BANK to transfer blocked funds
+            BankMessages.TransferFundsRequest transferRequest =
+                    new BankMessages.TransferFundsRequest(
+                            accountNumber,
+                            auctionHouseAccountNumber,
+                            finalPrice);
+            bankClient.sendMessage(transferRequest);
+            BankMessages.TransferFundsResponse transferResponse =
+                    (BankMessages.TransferFundsResponse) bankClient.receiveMessage();
+
+            if (!transferResponse.success) {
+                System.out.println("[AGENT] Failed to transfer funds for item "
+                        + itemId + ": " + transferResponse.message);
+                return;
+            }
+
+            // 2) Notify auction house that transfer is done
+            NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
+            if (connection == null) {
+                System.out.println("[AGENT] No connection to confirm winner");
+                return;
+            }
+
+            if (!connection.isConnected()) {  //  Additional check
+                System.out.println("[AGENT] Connection closed, cannot confirm winner");
+                return;
+            }
+
+            BlockingQueue<Message> queue = responseQueues.get(auctionHouseId);
+            if (queue == null) {  // Check before using
+                System.out.println("[AGENT] No response queue for auction house " + auctionHouseId);
+                return;
+            }
+
+            System.out.println("[AGENT] Confirming winner for item "
+                    + itemId + " after bank transfer...");
+
+            synchronized (connection) {
+                AuctionMessages.ConfirmWinnerRequest request =
+                        new AuctionMessages.ConfirmWinnerRequest(
+                                itemId, accountNumber);
+                connection.sendMessage(request);
+
+                Message msg;
+                try {
+                    msg = queue.take();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.out.println("[AGENT] Interrupted while waiting for confirmWinner response");
+                    return;
+                }
+
+                if (!(msg instanceof AuctionMessages.ConfirmWinnerResponse)) {
+                    System.out.println("[AGENT] Unexpected confirmWinner response type: "
+                            + msg.getClass().getSimpleName());
+                    return;
+                }
+
+                AuctionMessages.ConfirmWinnerResponse response =
+                        (AuctionMessages.ConfirmWinnerResponse) msg;
+                if (response.success) {
+                    System.out.println("[AGENT] Winner confirmed for item "
+                            + itemId + " (" + itemDescription + ")");
+                    // Record purchase
+                    purchases.add(new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice));
+                    if (uiCallback != null) {
+                        uiCallback.onPurchasesUpdated(getPurchases());
+                    }
+                    updateBalance();
+                } else {
+                    System.out.println("[AGENT] Auction house refused to confirm winner: "
+                            + response.message);
+                }
+            }
+        } catch (IOException | ClassNotFoundException e) {
+            System.out.println("[AGENT] Error confirming winner: " + e.getMessage());
+        }
+    }
+
     /**
      * Returns the item list from an auction house.
      * Opens a connection and sends a GetItems request, waiting for the response.
@@ -293,9 +396,7 @@ public class Agent {
      * @throws IOException if communication fails
      * @throws ClassNotFoundException if server reply is invalid
      */
-    public boolean placeBid(int auctionHouseId,
-                            int itemId,
-                            double bidAmount)
+    public boolean placeBid(int auctionHouseId, int itemId, double bidAmount)
             throws IOException, ClassNotFoundException {
         NetworkClient connection = auctionHouseConnections.computeIfAbsent(
                 auctionHouseId,
