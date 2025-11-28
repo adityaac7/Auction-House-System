@@ -4,10 +4,11 @@ import common.Message;
 import common.AuctionItem;
 
 /**
- * Messages for Auction House communication.
+ * Messages for Auction House communication with agent
+ *
  */
 public class AuctionMessages {
-
+    // Agents ask AuctionHouse to send current items.
     public static class GetItemsRequest extends Message {
         private static final long serialVersionUID = 1L;
 
@@ -15,6 +16,10 @@ public class AuctionMessages {
             super("GET_ITEMS");
         }
     }
+
+    /**
+     * AuctionHouse return currentItems with a message
+     */
 
     public static class GetItemsResponse extends Message {
         private static final long serialVersionUID = 1L;
@@ -31,6 +36,10 @@ public class AuctionMessages {
         }
     }
 
+    /**
+     * Agent req to place a bid on an item
+     */
+
 
     public static class PlaceBidRequest extends Message {
         private static final long serialVersionUID = 1L;
@@ -46,6 +55,10 @@ public class AuctionMessages {
             this.bidAmount = bidAmount;
         }
     }
+
+    /**
+     * Response Back to agent after trying to bid
+     */
 
     public static class PlaceBidResponse extends Message {
         private static final long serialVersionUID = 1L;
@@ -67,7 +80,7 @@ public class AuctionMessages {
         }
     }
     /**
-     * It confirms the winner of the bid
+     * It confirms the winner of the bid, If agents is winning and trigger a payment
     */
 
     public static class ConfirmWinnerRequest extends Message {
@@ -82,6 +95,10 @@ public class AuctionMessages {
             this.agentAccountNumber = agentAccountNumber;
         }
     }
+
+    /**
+     * AuctionHouse tell if agent is winner confirmed! and if payment worked
+     */
 
     public static class ConfirmWinnerResponse extends Message {
         private static final long serialVersionUID = 1L;
@@ -128,6 +145,14 @@ public class AuctionMessages {
             this.finalPrice = finalPrice;
             this.auctionHouseAccountNumber = auctionHouseAccountNumber;
             this.itemDescription = itemDescription;
+        }
+    }
+    //agent ensure auctionHouse to Closes the connection
+    public static class CloseConnection extends Message {
+        private static final long serialVersionUID = 1L;
+
+        public CloseConnection() {
+            super("CLOSE_CONNECTION");
         }
     }
 }
