@@ -403,7 +403,7 @@ public class Agent {
                             // Timeout is OK - just means no messages, connection still alive
                             // Don't log this, it's normal
                             continue;
-                        } catch (EOFException | IOException e) {
+                        } catch (IOException e) {
                             System.out.println("[AGENT] Connection lost to auction house "
                                     + auctionHouseId + ": " + e.getMessage());
                             break;

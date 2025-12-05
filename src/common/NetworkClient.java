@@ -40,6 +40,28 @@ public class NetworkClient {
     }
 
     /**
+     * Creates a new {@code NetworkClient} from an existing socket connection.
+     * This is used when accepting incoming connections on the server side.
+     *
+     * @param socket the already-connected socket
+     * @param outputStream the output stream for sending messages
+     * @param inputStream the input stream for receiving messages
+     * @throws IOException if an I/O error occurs during initialization
+     */
+    public NetworkClient(Socket socket,
+                         ObjectOutputStream outputStream,
+                         ObjectInputStream inputStream) throws IOException {
+        this.socket = socket;
+        this.outputStream = outputStream;
+        this.inputStream = inputStream;
+
+        // Configure socket options for existing connection
+        socket.setSoTimeout(30000);  // 30 second read timeout
+        socket.setKeepAlive(true);   // Enable TCP keep-alive
+        socket.setTcpNoDelay(true);  // Disable Nagle's algorithm
+    }
+
+    /**
      * Sends a message over the connection.
      *
      * @param message the message to send

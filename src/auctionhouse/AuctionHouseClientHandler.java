@@ -32,7 +32,7 @@ public class AuctionHouseClientHandler implements Runnable {
             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
             out.flush();
             ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
-            agentClient = new NetworkClient(socket, out, in);
+            agentClient =   new NetworkClient(socket, out, in);
 
             System.out.println("[AUCTION HOUSE] Agent handler started for " +
                     socket.getInetAddress());
