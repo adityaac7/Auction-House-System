@@ -34,9 +34,10 @@ public class NetworkClient {
         // Connect with timeout
         socket.connect(new InetSocketAddress(host, port), 10000);  // 10 second connection timeout
 
+        // CLIENT SIDE: Create INPUT stream FIRST, then OUTPUT stream
+        this.inputStream = new ObjectInputStream(socket.getInputStream());
         this.outputStream = new ObjectOutputStream(socket.getOutputStream());
         this.outputStream.flush();
-        this.inputStream = new ObjectInputStream(socket.getInputStream());
     }
 
     /**
@@ -48,8 +49,7 @@ public class NetworkClient {
      * @param inputStream the input stream for receiving messages
      * @throws IOException if an I/O error occurs during initialization
      */
-    public NetworkClient(Socket socket,
-                         ObjectOutputStream outputStream,
+    public NetworkClient(Socket socket, ObjectOutputStream outputStream,
                          ObjectInputStream inputStream) throws IOException {
         this.socket = socket;
         this.outputStream = outputStream;
