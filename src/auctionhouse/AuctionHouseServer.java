@@ -1,3 +1,8 @@
+package auctionhouse;
+import common.NetworkClient;
+import common.NetworkServer;
+import messages.BankMessages;
+
 import java.io.*;
 import java.net.Socket;
 
