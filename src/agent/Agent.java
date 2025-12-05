@@ -1,8 +1,7 @@
 package agent;
 
-import bank.BankClient;
 import common.AuctionHouseInfo;
-import common.AuctionItem; // If using items
+import common.AuctionItem;
 import common.Message;
 import common.NetworkClient;
 import messages.AuctionMessages;
@@ -13,42 +12,93 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Represents an agent (bidder) in the auction system
- * Synchronization, exception handling, thread management,
- * message routing, and agent-initiated transfers.
+ * Represents an agent (bidder) in the distributed auction system.
+ * <p>
+ * This class manages all agent operations including:
+ * <ul>
+ *   <li>Registration and communication with the bank server</li>
+ *   <li>Connections to multiple auction houses</li>
+ *   <li>Placing bids and tracking auction item statuses</li>
+ *   <li>Processing bid notifications (outbid, winner, etc.)</li>
+ *   <li>Managing account balance and blocked funds</li>
+ *   <li>Handling fund transfers for won auctions</li>
+ * </ul>
+ * <p>
+ * The Agent uses a multithreaded architecture with dedicated listener threads
+ * for each auction house connection to handle asynchronous notifications.
+ * Thread-safe operations are ensured through synchronization and concurrent
+ * data structures.
  */
 public class Agent {
+
+    /** The unique account number assigned by the bank */
     private int accountNumber;
+
+    /** The display name of this agent */
     private String agentName;
 
+    /** Network client for communication with the bank server */
     private NetworkClient bankClient;
 
-    // auctionHouseId -> NetworkClient to that house
+    /** Map of auction house IDs to their network client connections */
     private Map<Integer, NetworkClient> auctionHouseConnections;
-    // auctionHouseId -> AuctionHouseInfo
+
+    /** Map of auction house IDs to their information objects */
     private Map<Integer, AuctionHouseInfo> auctionHouses;
-    // auctionHouseId -> listener thread
+
+    /** Map of auction house IDs to their listener threads */
     private Map<Integer, Thread> listenerThreads;
 
-    // auctionHouseId -> queue of non-notification responses
+    /** Map of auction house IDs to queues for non-notification responses */
     private Map<Integer, BlockingQueue<Message>> responseQueues;
 
+    /** Callback interface for UI updates */
     private AgentUICallback uiCallback;
 
+    /** Total balance in the agent's account (available + blocked) */
     private volatile double totalBalance;
+
+    /** Funds available for bidding */
     private volatile double availableFunds;
+
+    /** Funds blocked for active bids */
     private volatile double blockedFunds;
+
+    /** Lock object for synchronizing balance updates */
     private final Object balanceLock = new Object();
 
-    // Purchases list for "My Purchases" view
+    /** List of completed purchases */
+    private final List<Purchase> purchases =
+            Collections.synchronizedList(new ArrayList<>());
+
+    /**
+     * Represents a completed purchase by the agent.
+     * This record is immutable and thread-safe.
+     */
     public static class Purchase {
+        /** The ID of the auction house where the item was purchased */
         public final int auctionHouseId;
+
+        /** The unique item ID */
         public final int itemId;
+
+        /** Description of the purchased item */
         public final String description;
+
+        /** Final purchase price */
         public final double price;
 
+        /**
+         * Constructs a new Purchase record.
+         *
+         * @param auctionHouseId the ID of the auction house
+         * @param itemId the unique item ID
+         * @param description the item description
+         * @param price the final purchase price
+         */
         public Purchase(int auctionHouseId, int itemId,
                         String description, double price) {
             this.auctionHouseId = auctionHouseId;
@@ -58,20 +108,64 @@ public class Agent {
         }
     }
 
-    private final List<Purchase> purchases = Collections.synchronizedList(new ArrayList<>());
-
+    /**
+     * Callback interface for UI updates.
+     * Implement this interface to receive real-time notifications about
+     * balance changes, item updates, bid status changes, and purchase history.
+     */
     public interface AgentUICallback {
+        /**
+         * Called when the agent's balance is updated.
+         *
+         * @param total the total balance (available + blocked)
+         * @param available funds available for new bids
+         * @param blocked funds blocked for active bids
+         */
         void onBalanceUpdated(double total, double available, double blocked);
 
+        /**
+         * Called when the item list from an auction house is updated.
+         *
+         * @param items array of current auction items
+         */
         void onItemsUpdated(AuctionItem[] items);
 
+        /**
+         * Called when a bid status changes (accepted, outbid, winner, etc.).
+         *
+         * @param itemId the item ID
+         * @param status the new status string
+         * @param message a descriptive message about the status change
+         */
         void onBidStatusChanged(int itemId, String status, String message);
 
-        default void onPurchasesUpdated(List<Purchase> purchases) {
-        }
+        /**
+         * Called when the purchase history is updated.
+         *
+         * @param purchases the updated list of purchases
+         */
+        default void onPurchasesUpdated(List<Purchase> purchases) { }
     }
 
-
+    /**
+     * Constructs a new Agent and registers it with the bank server.
+     * <p>
+     * This constructor performs the following operations:
+     * <ol>
+     *   <li>Establishes a connection to the bank server</li>
+     *   <li>Sends a registration request with initial balance</li>
+     *   <li>Receives an account number assignment</li>
+     *   <li>Retrieves the list of available auction houses</li>
+     * </ol>
+     *
+     * @param agentName the display name for this agent
+     * @param initialBalance the starting account balance
+     * @param bankHost the hostname or IP address of the bank server
+     * @param bankPort the port number of the bank server
+     * @throws IOException if network communication fails
+     * @throws ClassNotFoundException if message deserialization fails
+     * @throws IllegalStateException if registration is rejected by the bank
+     */
     public Agent(String agentName, double initialBalance, String bankHost, int bankPort)
             throws IOException, ClassNotFoundException {
         this.agentName = agentName;
@@ -81,6 +175,7 @@ public class Agent {
         this.responseQueues = new ConcurrentHashMap<>();
 
         this.bankClient = new NetworkClient(bankHost, bankPort);
+
         // Register with bank
         BankMessages.RegisterAgentRequest request =
                 new BankMessages.RegisterAgentRequest(agentName, initialBalance);
@@ -109,11 +204,98 @@ public class Agent {
     }
 
     /**
-     * Opens a connection and prepares a response queue for the given auction house.
-     * Does nothing if already connected.
+     * Sets the UI callback for receiving real-time updates.
      *
-     * @param auctionHouseId ID of the auction house to connect to
-     * @throws IOException if unable to connect
+     * @param callback the callback implementation, or null to disable callbacks
+     */
+    public void setUICallback(AgentUICallback callback) {
+        this.uiCallback = callback;
+    }
+
+    /**
+     * Returns the unique account number assigned by the bank.
+     *
+     * @return the account number
+     */
+    public int getAccountNumber() {
+        return accountNumber;
+    }
+
+    /**
+     * Returns the display name of this agent.
+     *
+     * @return the agent name
+     */
+    public String getAgentName() {
+        return agentName;
+    }
+
+    /**
+     * Returns the total account balance (available + blocked funds).
+     * This method is thread-safe.
+     *
+     * @return the total balance
+     */
+    public double getTotalBalance() {
+        synchronized (balanceLock) {
+            return totalBalance;
+        }
+    }
+
+    /**
+     * Returns the funds available for placing new bids.
+     * This method is thread-safe.
+     *
+     * @return the available funds
+     */
+    public double getAvailableFunds() {
+        synchronized (balanceLock) {
+            return availableFunds;
+        }
+    }
+
+    /**
+     * Returns the funds currently blocked for active bids.
+     * This method is thread-safe.
+     *
+     * @return the blocked funds
+     */
+    public double getBlockedFunds() {
+        synchronized (balanceLock) {
+            return blockedFunds;
+        }
+    }
+
+    /**
+     * Returns a thread-safe copy of the purchase history.
+     *
+     * @return a new list containing all purchases
+     */
+    public List<Purchase> getPurchases() {
+        synchronized (purchases) {
+            return new ArrayList<>(purchases);
+        }
+    }
+
+    /**
+     * Returns an array of all registered auction houses.
+     *
+     * @return array of AuctionHouseInfo objects
+     */
+    public AuctionHouseInfo[] getAuctionHouses() {
+        return auctionHouses.values().toArray(new AuctionHouseInfo[0]);
+    }
+
+    /**
+     * Establishes a connection to the specified auction house if not already connected.
+     * This method is idempotent and thread-safe.
+     * <p>
+     * Also initializes the response queue for handling non-notification messages
+     * from this auction house.
+     *
+     * @param auctionHouseId the unique ID of the auction house
+     * @throws IOException if the connection cannot be established
+     * @throws RuntimeException if the auction house ID is invalid
      */
     public void connectToAuctionHouse(int auctionHouseId) throws IOException {
         auctionHouseConnections.computeIfAbsent(auctionHouseId, id -> {
@@ -135,11 +317,20 @@ public class Agent {
     }
 
     /**
-     * Starts a dedicated thread for listening for notifications on the given auction house connection.
-     * Automatically restarts on connection loss or errors (with retry).
-     * Only one thread runs per auction house.
+     * Starts a dedicated listener thread for receiving asynchronous notifications
+     * from the specified auction house.
+     * <p>
+     * The listener thread handles:
+     * <ul>
+     *   <li>Bid status notifications (ACCEPTED, OUTBID, WINNER)</li>
+     *   <li>Response messages for synchronous requests</li>
+     *   <li>Connection recovery with up to 3 retry attempts</li>
+     * </ul>
+     * <p>
+     * If a listener thread is already running for this auction house, this method
+     * returns without starting a new thread.
      *
-     * @param auctionHouseId the auction house to listen to
+     * @param auctionHouseId the unique ID of the auction house
      */
     public void startListeningForNotifications(int auctionHouseId) {
         // Stop and wait for existing listener to terminate
@@ -231,7 +422,7 @@ public class Agent {
             }
         });
 
-        listenerThread.setDaemon(true);  //  Use daemon threads for cleanup
+        listenerThread.setDaemon(true);  // Use daemon threads for cleanup
         listenerThread.setName("Listener-AH-" + auctionHouseId);
         listenerThreads.put(auctionHouseId, listenerThread);
         listenerThread.start();
@@ -244,14 +435,151 @@ public class Agent {
         }
     }
 
+    /**
+     * Processes a winning bid by transferring funds and confirming the purchase
+     * with the auction house.
+     * <p>
+     * This method performs the following steps:
+     * <ol>
+     *   <li>Requests a fund transfer from the bank (blocked funds → auction house)</li>
+     *   <li>Sends a winner confirmation request to the auction house</li>
+     *   <li>Waits for confirmation response (10-second timeout)</li>
+     *   <li>Records the purchase in the purchase history</li>
+     *   <li>Updates the local balance from the bank</li>
+     * </ol>
+     * <p>
+     * This method handles errors gracefully and logs detailed status information.
+     *
+     * @param auctionHouseId the ID of the auction house
+     * @param itemId the won item's ID
+     * @param finalPrice the winning bid amount
+     * @param auctionHouseAccountNumber the auction house's bank account number
+     * @param itemDescription the item description for the purchase record
+     */
+    private void confirmWinner(int auctionHouseId, int itemId,
+                               double finalPrice,
+                               int auctionHouseAccountNumber,
+                               String itemDescription) {
+        System.out.println("[AGENT] ========================================");
+        System.out.println("[AGENT] Processing WINNER confirmation for Item " + itemId);
+        System.out.println("[AGENT] Final Price: $" + finalPrice);
+        System.out.println("[AGENT] ========================================");
+
+        try {
+            // 1) Ask BANK to transfer blocked funds
+            System.out.println("[AGENT] Step 1: Transferring $" + finalPrice + " to auction house...");
+            BankMessages.TransferFundsRequest transferRequest =
+                    new BankMessages.TransferFundsRequest(
+                            accountNumber,
+                            auctionHouseAccountNumber,
+                            finalPrice);
+
+            synchronized (bankClient) {
+                bankClient.sendMessage(transferRequest);
+                BankMessages.TransferFundsResponse transferResponse =
+                        (BankMessages.TransferFundsResponse) bankClient.receiveMessage();
+
+                if (!transferResponse.success) {
+                    System.out.println("[AGENT] ERROR: Failed to transfer funds for item "
+                            + itemId + ": " + transferResponse.message);
+                    return;
+                }
+
+                System.out.println("[AGENT] ✓ Transfer successful!");
+            }
+
+            // 2) Notify auction house that transfer is done
+            NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
+            if (connection == null) {
+                System.out.println("[AGENT] ERROR: No connection to confirm winner");
+                return;
+            }
+
+            if (!connection.isConnected()) {
+                System.out.println("[AGENT] ERROR: Connection closed, cannot confirm winner");
+                return;
+            }
+
+            BlockingQueue<Message> queue = responseQueues.get(auctionHouseId);
+            if (queue == null) {
+                System.out.println("[AGENT] ERROR: No response queue for auction house " + auctionHouseId);
+                return;
+            }
+
+            System.out.println("[AGENT] Step 2: Confirming winner with auction house...");
+
+            synchronized (connection) {
+                AuctionMessages.ConfirmWinnerRequest request =
+                        new AuctionMessages.ConfirmWinnerRequest(itemId, accountNumber);
+                connection.sendMessage(request);
+
+                // Wait for response with timeout
+                Message msg;
+                try {
+                    msg = queue.poll(10, TimeUnit.SECONDS); // 10-second timeout
+
+                    if (msg == null) {
+                        System.out.println("[AGENT] ERROR: Timeout waiting for confirmWinner response");
+                        return;
+                    }
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    System.out.println("[AGENT] ERROR: Interrupted while waiting for confirmWinner response");
+                    return;
+                }
+
+                if (!(msg instanceof AuctionMessages.ConfirmWinnerResponse)) {
+                    System.out.println("[AGENT] ERROR: Unexpected confirmWinner response type: "
+                            + msg.getClass().getSimpleName());
+                    return;
+                }
+
+                AuctionMessages.ConfirmWinnerResponse response =
+                        (AuctionMessages.ConfirmWinnerResponse) msg;
+
+                if (response.success) {
+                    System.out.println("[AGENT] ✓ Winner confirmed for item "
+                            + itemId + " (" + itemDescription + ")");
+
+                    // Record purchase
+                    purchases.add(new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice));
+
+                    if (uiCallback != null) {
+                        uiCallback.onPurchasesUpdated(getPurchases());
+                    }
+
+                    // Update balance
+                    updateBalance();
+
+                    System.out.println("[AGENT] ✓ Purchase complete! Item added to My Purchases");
+                } else {
+                    System.out.println("[AGENT] ERROR: Auction house refused to confirm winner: "
+                            + response.message);
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("[AGENT] ERROR confirming winner (IOException): " + e.getMessage());
+            e.printStackTrace();
+        } catch (ClassNotFoundException e) {
+            System.err.println("[AGENT] ERROR confirming winner (ClassNotFoundException): " + e.getMessage());
+            e.printStackTrace();
+        } catch (Exception e) {
+            System.err.println("[AGENT] ERROR confirming winner (Unexpected): " + e.getMessage());
+            e.printStackTrace();
+        }
+    }
 
     /**
-     * Returns the item list from an auction house.
-     * Opens a connection and sends a GetItems request, waiting for the response.
-     * @param auctionHouseId ID for the auction house to query
-     * @return array of {@link AuctionItem} available at that house
-     * @throws IOException if an I/O or connection failure occurs
-     * @throws ClassNotFoundException if the server response is invalid
+     * Retrieves the current list of auction items from the specified auction house.
+     * <p>
+     * This method establishes a connection if needed, sends a request for items,
+     * and waits up to 10 seconds for a response.
+     *
+     * @param auctionHouseId the unique ID of the auction house
+     * @return array of AuctionItem objects representing available items
+     * @throws IOException if network communication fails or timeout occurs
+     * @throws ClassNotFoundException if message deserialization fails
      */
     public AuctionItem[] getItemsFromAuctionHouse(int auctionHouseId)
             throws IOException, ClassNotFoundException {
@@ -285,7 +613,12 @@ public class Agent {
 
             Message msg;
             try {
-                msg = queue.take();
+                // Use poll with timeout instead of take
+                msg = queue.poll(10, TimeUnit.SECONDS);
+
+                if (msg == null) {
+                    throw new IOException("Timeout waiting for items response");
+                }
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Interrupted while waiting for items", e);
@@ -301,15 +634,27 @@ public class Agent {
             return response.items;
         }
     }
+
     /**
-     * Places a bid on the specified item at the specified auction house.
-     * Sends a PlaceBid request and waits for the response.
-     * @param auctionHouseId which auction house to send the bid to
-     * @param itemId         which item to bid on
-     * @param bidAmount      how much to bid
-     * @return true if bid is accepted, false if rejected
-     * @throws IOException if communication fails
-     * @throws ClassNotFoundException if server reply is invalid
+     * Places a bid on the specified item at the given auction house.
+     * <p>
+     * This method:
+     * <ol>
+     *   <li>Sends a bid request to the auction house</li>
+     *   <li>Waits for a synchronous response (not the async notification)</li>
+     *   <li>Updates the local balance if the bid is accepted</li>
+     *   <li>Returns true if bid was accepted, false otherwise</li>
+     * </ol>
+     * <p>
+     * Note: Even if this method returns true, the agent may later be outbid.
+     * Use the listener thread notifications to track ongoing bid status.
+     *
+     * @param auctionHouseId the unique ID of the auction house
+     * @param itemId the item ID to bid on
+     * @param bidAmount the bid amount (must meet minimum increment requirements)
+     * @return true if the bid was accepted, false if rejected
+     * @throws IOException if network communication fails
+     * @throws ClassNotFoundException if message deserialization fails
      */
     public boolean placeBid(int auctionHouseId, int itemId, double bidAmount)
             throws IOException, ClassNotFoundException {
@@ -368,8 +713,16 @@ public class Agent {
             }
         }
     }
+
     /**
-     * Fetches updated account information from the bank and notifies the UI callback.
+     * Queries the bank for the latest account balance information and updates
+     * local balance fields.
+     * <p>
+     * This method synchronizes with the bank server to get authoritative
+     * balance data (total, available, and blocked funds) and notifies the
+     * UI callback if registered.
+     * <p>
+     * This method is thread-safe and can be called concurrently.
      */
     public void updateBalance() {
         try {
@@ -402,9 +755,19 @@ public class Agent {
             System.out.println("[AGENT] Invalid balance response: " + e.getMessage());
         }
     }
+
     /**
-     * Disconnects cleanly from all auction houses and the bank.
-     * Interrupts notification listeners, closes sockets, and notifies the bank of deregistration.
+     * Cleanly disconnects the agent from the auction system.
+     * <p>
+     * This method performs shutdown in the following order:
+     * <ol>
+     *   <li>Interrupts all listener threads</li>
+     *   <li>Closes all auction house connections</li>
+     *   <li>Sends a deregistration request to the bank</li>
+     *   <li>Closes the bank connection</li>
+     * </ol>
+     * <p>
+     * After calling this method, the Agent object should not be reused.
      */
     public void disconnect() {
         System.out.println("[AGENT] Disconnecting...");
@@ -446,9 +809,16 @@ public class Agent {
             }
         }
     }
+
     /**
-     * Refreshes the known set of auction houses by querying the bank.
-     * Replaces the current auctionHouses cache with updated information.
+     * Refreshes the local list of auction houses by querying the bank server.
+     * <p>
+     * This method should be called periodically or when the user requests
+     * an updated list of available auction houses. New auction houses that
+     * register after the agent starts will not be visible until this method
+     * is called.
+     * <p>
+     * Existing connections to auction houses are not affected by this operation.
      */
     public void refreshAuctionHouses() {
         try {
@@ -473,142 +843,4 @@ public class Agent {
                     + e.getMessage());
         }
     }
-
-    /**
-     * Agent-initiated funds transfer and winner confirmation after winning an auction.
-     * Not public API; invoked internally after a WINNER notification.
-     * @param auctionHouseId Auction house ID
-     * @param itemId         Item ID
-     * @param finalPrice     Winning price
-     * @param auctionHouseAccountNumber Auction house's bank account
-     * @param itemDescription Item description for purchase tracking
-     */
-    private void confirmWinner(int auctionHouseId, int itemId, double finalPrice, int auctionHouseAccountNumber,
-                               String itemDescription) {
-        try {
-            // 1) Ask BANK to transfer blocked funds
-            BankMessages.TransferFundsRequest transferRequest =
-                    new BankMessages.TransferFundsRequest(
-                            accountNumber,
-                            auctionHouseAccountNumber,
-                            finalPrice);
-            bankClient.sendMessage(transferRequest);
-            BankMessages.TransferFundsResponse transferResponse =
-                    (BankMessages.TransferFundsResponse) bankClient.receiveMessage();
-
-            if (!transferResponse.success) {
-                System.out.println("[AGENT] Failed to transfer funds for item "
-                        + itemId + ": " + transferResponse.message);
-                return;
-            }
-
-            // 2) Notify auction house that transfer is done
-            NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
-            if (connection == null) {
-                System.out.println("[AGENT] No connection to confirm winner");
-                return;
-            }
-
-            BlockingQueue<Message> queue =
-                    responseQueues.computeIfAbsent(auctionHouseId,
-                            id -> new LinkedBlockingQueue<>());
-
-            System.out.println("[AGENT] Confirming winner for item "
-                    + itemId + " after bank transfer...");
-
-            synchronized (connection) {
-                AuctionMessages.ConfirmWinnerRequest request =
-                        new AuctionMessages.ConfirmWinnerRequest(
-                                itemId, accountNumber);
-                connection.sendMessage(request);
-
-                Message msg;
-                try {
-                    msg = queue.take();
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    System.out.println("[AGENT] Interrupted while waiting for confirmWinner response");
-                    return;
-                }
-
-                if (!(msg instanceof AuctionMessages.ConfirmWinnerResponse)) {
-                    System.out.println("[AGENT] Unexpected confirmWinner response type: "
-                            + msg.getClass().getSimpleName());
-                    return;
-                }
-
-                AuctionMessages.ConfirmWinnerResponse response =
-                        (AuctionMessages.ConfirmWinnerResponse) msg;
-                if (response.success) {
-                    System.out.println("[AGENT] Winner confirmed for item "
-                            + itemId + " (" + itemDescription + ")");
-                    // Record purchase
-                    purchases.add(new Purchase(
-                            auctionHouseId, itemId, itemDescription, finalPrice));
-                    if (uiCallback != null) {
-                        uiCallback.onPurchasesUpdated(getPurchases());
-                    }
-                    updateBalance();
-                } else {
-                    System.out.println("[AGENT] Auction house refused to confirm winner: "
-                            + response.message);
-                }
-            }
-        } catch (IOException | ClassNotFoundException e) {
-            System.out.println("[AGENT] Error confirming winner: " + e.getMessage());
-        }
-    }
-    /**
-     * Sets the UI callback for this agent. Used to notify the controller/view layer about updates.
-     * @param callback UI callback
-     */
-    public void setUICallback(AgentUICallback callback) {
-        this.uiCallback = callback;
-    }
-
-    /** @return this agent's unique bank account number */
-    public int getAccountNumber() { return accountNumber; }
-
-    /** @return this agent's display name */
-    public String getAgentName() { return agentName; }
-
-    /** @return current total balance from the bank (including available and blocked) */
-    public double getTotalBalance() {
-        synchronized (balanceLock) {
-            return totalBalance;
-        }
-    }
-
-    /** @return current available balance (not blocked) */
-    public double getAvailableFunds() {
-        synchronized (balanceLock) {
-            return availableFunds;
-        }
-    }
-
-    /** @return total funds currently blocked in active bids */
-    public double getBlockedFunds() {
-        synchronized (balanceLock) {
-            return blockedFunds;
-        }
-    }
-
-    /**
-     * Returns a copy of the purchases made so far by this agent.
-     * @return list of past winning purchases
-     */
-    public List<Purchase> getPurchases() {
-        synchronized (purchases) {
-            return new ArrayList<>(purchases);
-        }
-    }
-
-    /**
-     * Gets the set of auction houses currently known/advertised by the bank.
-     * @return array of {@link AuctionHouseInfo}
-     */
-    public AuctionHouseInfo[] getAuctionHouses() {
-        return auctionHouses.values().toArray(new AuctionHouseInfo[0]);
-    }
 }
-
