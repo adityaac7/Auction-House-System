@@ -38,7 +38,7 @@ public class AuctionItemManager { // Renamed from ItemManager
 
     /**
      *
-     * It returns status like accepted, itemNotFound, bidTooLow,
+     * It @return status like accepted, itemNotFound, bidTooLow,
      * not highEnough, auctionClosed
      */
     public synchronized String placeBid(int itemId, String agentId, double amount) {

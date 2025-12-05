@@ -1,310 +1,377 @@
 package auctionhouse;
-
-import common.AuctionItem; // If referenced directly
-import common.NetworkServer; // If using the utility
-// If using BankClient to connect:
-import bank.BankClient;
-
 import java.io.IOException;
-import java.net.Socket;
-import java.net.UnknownHostException;
-
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
-import messages.AuctionMessages; // It is message between Agent and Auction House
-import messages.BankMessages; // Between AuctionHouse and Bank
+
+import common.AuctionItem;
+import common.Message;
+import common.NetworkClient;
+import messages.AuctionMessages;
 
 /**
- * The Auction House.
- * Acts as a Client to the Bank and a Server to Agents.
- * **
- * Talking to bank thru BankCLient at needed.
- * Accepting Agent connection and handling their requests.
+ * Represents the Auction House in the distributed auction system.
+ * This class manages the lifecycle of auction items, handles communication
+ * with the Bank and connected Agents, and processes all bidding logic.
  */
 public class AuctionHouse {
-        private final int auctionHouseId;
-        private int auctionHouseAccountNumber;
-        private final String bankHost;
-        private final int bankPort;
 
-        private final ItemManager itemManager; //manages items AND bidding
-        private BankClient bankClient;      // connects to Bank
-        private NetworkServer agentServer; //   It listen to agent and gives accepted nptes to us.
+    private int auctionHouseId;
+    private int auctionHouseAccountNumber;
+    private NetworkClient bankClient;
 
+    // Manages the collection of auction items and valid bid checking
+    private AuctionItemManager itemManager;
 
-    //It starts the auction House and decides the HouseId, Bank_Host, Bank_Port
+    // Stores active connections to agents, mapped by their account number
+    private Map<Integer, NetworkClient> agentConnections;
 
-    public static void main(String[] args) {
-        if (args.length < 3) {
-            System.out.println("Usage: java AuctionHouse [HouseId] [Bank_Host] [Bank_Port]");
-            return;
+    // Pre-defined data for generating random items
+    private String[] itemDescriptions;
+    private double[] itemMinimumBids;
+
+    // Callback interface for updating the GUI with logs and events
+    private AuctionHouseCallback callback;
+
+    /**
+     * Interface to allow the AuctionHouse to communicate events back to the GUI.
+     */
+    public interface AuctionHouseCallback {
+        void onBidPlaced(int itemId, String itemDesc, int agentAccount, double bidAmount);
+        void onBidRejected(int itemId, String itemDesc, int agentAccount,
+                           double bidAmount, String reason);
+        void onAgentOutbid(int itemId, String itemDesc, int previousBidder,
+                           int newBidder, double newBid);
+        void onItemSold(int itemId, String itemDesc, int winner, double finalPrice);
+    }
+
+    // Default constructor that starts with 5 items
+    public AuctionHouse(int auctionHouseId,
+                        int auctionHouseAccountNumber,
+                        NetworkClient bankClient) {
+        this(auctionHouseId, auctionHouseAccountNumber, bankClient, 5);
+    }
+
+    /**
+     * Initializes the Auction House with specific ID and bank connection.
+     * @param initialItemCount Number of items to auto-generate upon startup.
+     */
+    public AuctionHouse(int auctionHouseId,
+                        int auctionHouseAccountNumber,
+                        NetworkClient bankClient,
+                        int initialItemCount) {
+        this.auctionHouseId = auctionHouseId;
+        this.auctionHouseAccountNumber = auctionHouseAccountNumber;
+        this.bankClient = bankClient;
+
+        // Initialize the manager that handles item storage and logic
+        this.itemManager = new AuctionItemManager(auctionHouseId);
+
+        this.agentConnections = new ConcurrentHashMap<>();
+
+        // Helper arrays for generating random item details
+        this.itemDescriptions = new String[] {
+                "Vintage Watch", "Rare Painting", "Antique Vase"
+        };
+
+        // Helper array for random minimum bid amounts
+        this.itemMinimumBids = new double[] {
+                100.0, 500.0, 200.0, 5000.0, 1000.0,
+                150.0, 300.0, 75.0, 800.0, 50.0
+        };
+
+        // Create the initial set of items
+        for (int i = 0; i < initialItemCount; i++) {
+            addNewItem();
         }
 
-        int auctionHouseId = Integer.parseInt(args[0]);
-        String bankHost = args[1];
-        int bankPort = Integer.parseInt(args[2]);
+        System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Initialized with "
+                + initialItemCount + " items");
+    }
 
-        AuctionHouse house = new AuctionHouse(auctionHouseId, bankHost, bankPort);
-        house.start();
+    // ===== Getters and Setters =====
+
+    public void setCallback(AuctionHouseCallback callback) {
+        this.callback = callback;
+    }
+
+    public AuctionHouseCallback getCallback() {
+        return callback;
+    }
+
+    public int getAuctionHouseId() {
+        return auctionHouseId;
+    }
+
+    public int getAuctionHouseAccountNumber() {
+        return auctionHouseAccountNumber;
     }
 
     /**
-     * It stores configs:
-     * @param auctionHouseId
-     * @param bankHost
-     * @param bankPort
-     * Also Create ItemManger for the auction House.
+     * Registers an agent connection so the house can send notifications later.
      */
-
-    public AuctionHouse(int auctionHouseId, String bankHost, int bankPort) {
-        this.auctionHouseId = auctionHouseId;
-        this.bankHost = bankHost;
-        this.bankPort = bankPort;
-        this.auctionHouseAccountNumber = -1;
-        this.itemManager = new ItemManager(auctionHouseId); // todo
-
-        System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Created for bank "
-                + bankHost + ":" + bankPort);
+    public void registerAgentConnection(int agentAccountNumber, NetworkClient connection) {
+        agentConnections.put(agentAccountNumber, connection);
     }
 
     /**
-     * IT connect to bank
-     * register the Auction House with the bank
-     * Start server for the Agents
+     * Removes an agent connection when they disconnect.
      */
+    public void unregisterAgentConnection(int agentAccountNumber) {
+        agentConnections.remove(agentAccountNumber);
+    }
 
-
-    private void start() {
+    /**
+     * Retrieves the current snapshot of all items.
+     * Synchronized to ensure thread safety when accessing the item list.
+     */
+    public synchronized AuctionMessages.GetItemsResponse getItems() {
         try {
-            connectToBank();
+            // Retrieve all items from the manager
+            Collection<AuctionItem> itemsCollection = itemManager.getAllItems();
+            AuctionItem[] itemArray = itemsCollection.toArray(new AuctionItem[0]);
 
-            // 2. Register House with Bank
-            // 3. Start Server for Agents
-            startAgentServer();
-
+            return new AuctionMessages.GetItemsResponse(
+                    true, itemArray, "Items retrieved successfully");
         } catch (Exception e) {
             e.printStackTrace();
+            return new AuctionMessages.GetItemsResponse(
+                    false, new AuctionItem[0], "Failed to retrieve items");
         }
+    }
+
+    // Wrappers for handling network requests
+    public AuctionMessages.PlaceBidResponse handlePlaceBidRequest(int itemId, int agentAccountNumber, double bidAmount) {
+        return placeBid(itemId, agentAccountNumber, bidAmount);
+    }
+
+    public AuctionMessages.GetItemsResponse handleGetItemsRequest() {
+        return getItems();
+    }
+
+    public AuctionMessages.ConfirmWinnerResponse handleConfirmWinnerRequest(int itemId, int agentAccountNumber) {
+        return confirmWinner(itemId, agentAccountNumber);
     }
 
     /**
-     * Handle GetItems from Agent.
-     * make into string message by forwarding it to ItemManger.
+     * Processes a bid request from an agent.
+     * Validates the item existence and delegates the bid logic to the ItemManager.
      */
-    public AuctionMessages.GetItemsResponse handleGetItemsRequest() {
-        Collection<AuctionItem> items = itemManager.getAllItems();
-        AuctionItem[] array = items.toArray(new AuctionItem[0]);
-        return new AuctionMessages.GetItemsResponse(true, array, "OK");// May add error states later if req.
+    public AuctionMessages.PlaceBidResponse placeBid(int itemId,
+                                                     int agentAccountNumber,
+                                                     double bidAmount) {
+        // Retrieve the item object
+        AuctionItem item = itemManager.getItem(itemId);
 
-    }
-
-    // Handle a bid, form an agent
-    // Asking Item Manager if bid is valid.
-    // ItemManger then return a status.
-
-    public AuctionMessages.PlaceBidResponse handlePlaceBidRequest(
-            int itemId,
-            int agentAccountNumber,
-            double bidAmount) {
-
-        // ItemManager shows status;
-        // "ACCEPTED", "ITEM_NOT_FOUND", "BID_TOO_LOW",
-        // "NOT_HIGH_ENOUGH", "AUCTION_CLOSED"
-        String status = itemManager.placeBid(
-                itemId,
-                String.valueOf(agentAccountNumber),
-                bidAmount
-        );
-
-        boolean success = "ACCEPTED".equals(status);
-        String message;
-
-        switch (status) {
-            case "ITEM_NOT_FOUND":
-                message = "Item not found";
-                break;
-            case "BID_TOO_LOW":
-                message = "Bid below minimum";
-                break;
-            case "NOT_HIGH_ENOUGH":
-                message = "Bid not higher than current";
-                break;
-            case "AUCTION_CLOSED":
-                message = "Auction already closed";
-                break;
-            case "ACCEPTED":
-                message = "Bid accepted";
-                break;
-            default:
-                message = status;
-                break;
+        if (item == null) {
+            if (callback != null) {
+                callback.onBidRejected(itemId, "Unknown", agentAccountNumber,
+                        bidAmount, "Item not found");
+            }
+            return new AuctionMessages.PlaceBidResponse(
+                    false, "REJECTED", "Item not found", bidAmount);
         }
 
-        return new AuctionMessages.PlaceBidResponse(
-                success,
-                status,
-                message,
-                bidAmount
-        );
+        String itemDesc = item.description;
+
+        // Track who the previous bidder was to send an outbid notification
+        int previousBidder = item.currentBidderAccountNumber;
+
+        // Attempt to place the bid via the manager
+        String status = itemManager.placeBid(itemId, String.valueOf(agentAccountNumber), bidAmount);
+        boolean success = "ACCEPTED".equals(status);
+
+        if (success) {
+            // Update GUI
+            if (callback != null) {
+                callback.onBidPlaced(itemId, itemDesc, agentAccountNumber, bidAmount);
+            }
+
+            // Notify the previous bidder that they have been outbid
+            if (previousBidder != -1 && previousBidder != agentAccountNumber) {
+                notifyAgent(previousBidder, itemId, "OUTBID",
+                        "You have been outbid on " + itemDesc, 0, auctionHouseAccountNumber, itemDesc);
+
+                if (callback != null) {
+                    callback.onAgentOutbid(itemId, itemDesc, previousBidder, agentAccountNumber, bidAmount);
+                }
+            }
+        } else if (callback != null) {
+            callback.onBidRejected(itemId, itemDesc, agentAccountNumber,
+                    bidAmount, status);
+        }
+
+        String message = success ? "Bid accepted" : "Bid rejected: " + status;
+        return new AuctionMessages.PlaceBidResponse(success, status, message, bidAmount);
     }
 
-    /**Confirming calling agent is the winner
-     * if fixed no more bidding is happening here
-     * Then, ask Bank to transfer fund from agento to AuctionHouse
-    */
-    public AuctionMessages.ConfirmWinnerResponse handleConfirmWinnerRequest(int itemId,
-                                                                            int agentAccountNumber) {
+    /**
+     * Confirms that an item has been sold to a specific agent.
+     * This is called after the agent successfully transfers funds to the bank.
+     */
+    public AuctionMessages.ConfirmWinnerResponse confirmWinner(int itemId,
+                                                               int agentAccountNumber) {
+        System.out.println("[AUCTION HOUSE] ========================================");
+        System.out.println("[AUCTION HOUSE] Processing confirmWinner for Item " + itemId);
+        System.out.println("[AUCTION HOUSE] Agent: " + agentAccountNumber);
+
         AuctionItem item = itemManager.getItem(itemId);
         if (item == null) {
+            System.out.println("[AUCTION HOUSE] ERROR: Item " + itemId + " not found");
             return new AuctionMessages.ConfirmWinnerResponse(false, "Item not found");
         }
 
-        if (item.getCurrentBidderAccount() != agentAccountNumber) {
-            return new AuctionMessages.ConfirmWinnerResponse(false, "You are not the highest bidder");
+        // Verify the agent claiming the win is actually the current highest bidder
+        if (item.currentBidderAccountNumber != agentAccountNumber) {
+            System.out.println("[AUCTION HOUSE] ERROR: Agent " + agentAccountNumber
+                    + " is not the winner (winner is " + item.currentBidderAccountNumber + ")");
+            return new AuctionMessages.ConfirmWinnerResponse(
+                    false, "You are not the winning bidder");
         }
 
-        double finalPrice = item.getCurrentBid();
+        double soldPrice = item.currentBid;
+        int winnerAccount = item.currentBidderAccountNumber;
+        String itemDesc = item.description;
 
-        // no more bids here be taken lock th auction
+        System.out.println("[AUCTION HOUSE] Step 1: Logging sale...");
+
+        // Update GUI with sale info
+        if (callback != null) {
+            callback.onItemSold(itemId, itemDesc, winnerAccount, soldPrice);
+        }
+
+        System.out.println("[AUCTION HOUSE] Step 2: Broadcasting ITEM_SOLD to all agents...");
+
+        // Notify all connected agents that the item is sold
+        broadcastToAllAgents(itemId, "ITEM_SOLD",
+                "Item " + itemId + " (" + itemDesc + ") sold to Agent " + winnerAccount
+                        + " for $" + String.format("%.2f", soldPrice));
+
+        System.out.println("[AUCTION HOUSE] Step 3: Closing item...");
+
+        // Mark the item as closed in the manager
         itemManager.closeItem(itemId);
 
-        // from agentAccountNumber to auctionHouseAccountNumber thru Ban, resulting in a finalPrice
-
-        if (bankClient != null && auctionHouseAccountNumber > 0) {
-            try {
-                boolean ok = bankClient.transferFunds(
-                        agentAccountNumber,
-                        auctionHouseAccountNumber,
-                        finalPrice
-                );
-                if (!ok) {
-                    //IN this step if we see transfer dailed, we dont finally declare a winner.
-                    return new AuctionMessages.ConfirmWinnerResponse(
-                            false,
-                            "Bank transfer failed; winner not finalized"
-                    );
-                }
-            } catch (IOException | ClassNotFoundException e) {
-                return new AuctionMessages.ConfirmWinnerResponse(
-                        false,
-                        "Error contacting Bank for transfer: " + e.getMessage()
-                );
-            }
-        }
+        System.out.println("[AUCTION HOUSE] ✓ Item " + itemId + " sold to agent "
+                + winnerAccount + " for $" + soldPrice);
+        System.out.println("[AUCTION HOUSE] ========================================");
 
         return new AuctionMessages.ConfirmWinnerResponse(
-                true,
-                "Winner confirmed at price " + finalPrice
-        );
-
-    }
-    /**
-     * Connecting to bank server a client
-     * Here BankClient Wrap a NetworkClient
-     * */
-
-private void connectToBank() {
-        // TODO: Implement socket connection to BankServer
-        System.out.println("Connecting to Bank...");
-    try {
-        // Create BankClient to the Bank server
-        this.bankClient = new BankClient(bankHost, bankPort);
-
-        // Open the TCP connection which uses NetworkClient inside it
-        bankClient.connect();
-
-        System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Connected to Bank at "
-                + bankHost + ":" + bankPort);
-        } catch (IOException e) {
-        System.err.println("[AUCTION HOUSE " + auctionHouseId
-                + "] Failed to connect to Bank: " + e.getMessage());
-        // When Bank is unreach, there is no meaning of starting the house
-        throw new RuntimeException("Unable to connect to Bank", e);
-        }
+                true, "Item purchased and removed from auction");
     }
 
     /**
-     * Starting a Server listen for Agent Connections
-     * First, STarting a NetworkServer on a 0 port
-     * Then, Asking bank to register this auction House with the host and port
-     * ACCEPT LOOP THAT spawns AuctionHouseClientHandler for each agent
+     * Broadcasts a status message to all connected agents.
+     * Automatically cleans up connections if an agent has disconnected.
      */
+    public void broadcastToAllAgents(int itemId, String status, String message) {
+        List<Integer> disconnected = new ArrayList<>();
 
-    private void startAgentServer() {
-        System.out.println("Starting Agent Server...");
-        try {
-            //Creating a NetworkServer on an ephemeral port
-            this.agentServer = new NetworkServer(0);
-            this.agentServer.start();
+        for (Map.Entry<Integer, NetworkClient> entry : agentConnections.entrySet()) {
+            int agentAccount = entry.getKey();
+            NetworkClient connection = entry.getValue();
 
-            // Finding which hpst and port we are listening.
-            String host;
             try {
-                host = agentServer.getHost();
-            } catch (UnknownHostException e) {
-                //Fallback if host fails
-                host = "127.0.0.1";
+                AuctionMessages.BidStatusNotification notification =
+                        new AuctionMessages.BidStatusNotification(
+                                itemId, status, message, 0,
+                                auctionHouseAccountNumber, "");
+                connection.sendMessage(notification);
+            } catch (IOException e) {
+                // Track disconnected agents to remove them safely later
+                disconnected.add(agentAccount);
             }
-            int port = agentServer.getPort();
+        }
 
-            System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Listening for Agents on "
-                    + host + ":" + port);
-
-            // Registering this Auction House with the Bank
-            // Then, Agents can discover us from the Bank side.
-            if (bankClient != null) {
-                try {
-                    BankMessages.RegisterAuctionHouseResponse resp =
-                            bankClient.registerAuctionHouse(host, port);
-
-                    if (!resp.success) {
-                        throw new RuntimeException("Bank registration failed: " + resp.message);
-                    }
-
-                    this.auctionHouseAccountNumber = resp.accountNumber;
-
-                    System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Registered with Bank:");
-                    System.out.println("    AuctionHouseId (Bank) = " + resp.auctionHouseId);
-                    System.out.println("    AccountNumber         = " + auctionHouseAccountNumber);
-                } catch (IOException | ClassNotFoundException e) {
-                    throw new RuntimeException("Error registering Auction House with Bank", e);
-                }
-            } else {
-                System.err.println("[AUCTION HOUSE " + auctionHouseId
-                        + "] BankClient is null; cannot register with Bank.");
-            }
-
-            // Creating thread that continually accepts Agent connections
-            Thread acceptThread = new Thread(() -> {
-                System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Accept thread started");
-                while (agentServer.isRunning() && !agentServer.isClosed()) {
-                    try {
-                        //This block untl agnet connect
-                        Socket clientSocket = agentServer.acceptConnection();
-                        System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Agent connected from "
-                                + clientSocket.getInetAddress());
-                        // fOR EACH AGENT SOCKET, it create a new handler thread.
-
-                        //Implementing request handling AuctionHouseClientHandler.
-                        AuctionHouseClientHandler handler =
-                                new AuctionHouseClientHandler(clientSocket, this);
-                        handler.start();
-                    } catch (IOException e) {
-                        if (agentServer.isRunning()) {
-                            System.err.println("[AUCTION HOUSE " + auctionHouseId
-                                    + "] Error accepting agent connection: " + e.getMessage());
-                        }
-                    }
-                }
-                System.out.println("[AUCTION HOUSE " + auctionHouseId + "] Accept thread terminating");
-            });
-
-            acceptThread.setDaemon(true);
-            acceptThread.start();
-
-        } catch (IOException e) {
-            throw new RuntimeException("Failed to start Agent Server", e);
+        // Remove any agents that failed to receive the message
+        for (int account : disconnected) {
+            agentConnections.remove(account);
         }
     }
 
+    /**
+     * Helper method to send a message to the Bank and block waiting for a response.
+     */
+    public Message sendToBankAndWait(Message message) throws Exception {
+        bankClient.sendMessage(message);
+        return bankClient.receiveMessage();
+    }
+
+    /**
+     * Sends a notification to a specific agent (e.g., when they are outbid).
+     */
+    public void notifyAgent(int agentAccountNumber,
+                            int itemId,
+                            String status,
+                            String message,
+                            double finalPrice,
+                            int auctionHouseAccountNumber,
+                            String itemDescription) {
+        NetworkClient connection = agentConnections.get(agentAccountNumber);
+        if (connection != null) {
+            try {
+                AuctionMessages.BidStatusNotification notification =
+                        new AuctionMessages.BidStatusNotification(
+                                itemId, status, message,
+                                finalPrice, auctionHouseAccountNumber,
+                                itemDescription);
+                connection.sendMessage(notification);
+            } catch (IOException e) {
+                agentConnections.remove(agentAccountNumber);
+            }
+        }
+    }
+
+    /**
+     * Automatically creates a new item with a random description and minimum bid.
+     */
+    public synchronized void addNewItem() {
+        // Calculate index for random data selection based on current count
+        int tempIndex = itemManager.getAllItems().size() + 1;
+
+        String description = itemDescriptions[
+                Math.abs(tempIndex % itemDescriptions.length)];
+        double minimumBid = itemMinimumBids[
+                Math.abs(tempIndex % itemMinimumBids.length)];
+
+        // Add to manager
+        itemManager.addItem(description, minimumBid);
+    }
+
+    /**
+     * Adds a new item with specific details (used by the GUI).
+     */
+    public synchronized void addNewItem(String description, double minimumBid) {
+        itemManager.addItem(description, minimumBid);
+    }
+
+    /**
+     * Attempts to remove an item.
+     * Returns false if the item has active bids or cannot be found.
+     */
+    public synchronized boolean removeItem(int itemId) {
+        AuctionItem item = itemManager.getItem(itemId);
+        // Only allow removal if no one has bid on it yet
+        if (item != null && item.currentBidderAccountNumber == -1) {
+            // NOTE: The current AuctionItemManager does not implement a remove method.
+            // This would need to be extended if deletion functionality is required.
+            return false;
+        }
+        return false;
+    }
+
+    /**
+     * Checks if there are any active bids on any items.
+     * Used to prevent closing the server while auctions are active.
+     */
+    public boolean hasActiveBids() {
+        return itemManager.getAllItems().stream()
+                .anyMatch(item -> item.currentBidderAccountNumber != -1);
+    }
+
+    /**
+     * Returns the total number of items currently managed.
+     */
+    public int getItemCount() {
+        return itemManager.getAllItems().size();
+    }
 }
