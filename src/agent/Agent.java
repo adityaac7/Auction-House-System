@@ -849,4 +849,26 @@ public class Agent {
                     + e.getMessage());
         }
     }
+    public void closeAuctionHouseConnection(int auctionHouseId) {
+        NetworkClient connection = auctionHouseConnections.remove(auctionHouseId);
+        if (connection != null) {
+            try {
+                connection.close();
+            } catch (IOException e) {
+                // Ignore close errors
+            }
+        }
+
+        // Stop the listener thread
+        Thread listener = listenerThreads.remove(auctionHouseId);
+        if (listener != null && listener.isAlive()) {
+            listener.interrupt();
+        }
+
+        // Clear response queue
+        BlockingQueue<Message> queue = responseQueues.remove(auctionHouseId);
+        if (queue != null) {
+            queue.clear();
+        }
+    }
 }
