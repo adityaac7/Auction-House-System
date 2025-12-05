@@ -355,6 +355,17 @@ public class AuctionHouse {
         // Shut down the timer executor
         manager.shutdown();
 
+        //  CREATE RESPONSE FIRST (before broadcasting)
+        AuctionMessages.ConfirmWinnerResponse response =
+                new AuctionMessages.ConfirmWinnerResponse(
+                        true, "Item purchased and removed from auction");
+
+        //  NOW broadcast to all agents (AFTER response is ready to return)
+        System.out.println("[AUCTION HOUSE] Step 5: Broadcasting ITEM_SOLD to all agents...");
+        broadcastToAllAgents(itemId, "ITEM_SOLD",
+                "Item " + itemId + " (" + itemDesc + ") sold to Agent " + winnerAccount
+                        + " for $" + String.format("%.2f", soldPrice));
+
         System.out.println("[AUCTION HOUSE] ✓ Item " + itemId + " sold to agent "
                 + winnerAccount + " for $" + soldPrice);
         System.out.println("[AUCTION HOUSE] ✓ Item removed from auction list");

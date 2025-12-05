@@ -202,6 +202,19 @@ public class Agent {
             throw new IOException("Failed to register agent: " + response.message);
         }
     }
+    /**
+     * Checks if the agent is connected to the specified auction house.
+     *
+     * <p>This method verifies both that a connection exists and that the
+     * underlying network connection is still active.
+     *
+     * @param auctionHouseId the unique ID of the auction house
+     * @return true if connected and connection is active, false otherwise
+     */
+    public boolean isConnectedToAuctionHouse(int auctionHouseId) {
+        NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
+        return connection != null && connection.isConnected();
+    }
 
     /**
      * Sets the UI callback for receiving real-time updates.
