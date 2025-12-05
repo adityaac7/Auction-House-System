@@ -528,59 +528,100 @@ public class AgentApplication extends Application {
         setStatusMessage("Loading items...", "blue");
 
         new Thread(() -> {
-            try {
-                // Connect to auction house if not already connected
-                agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
+            int retryCount = 0;
+            final int MAX_RETRIES = 3;
+            boolean success = false;
 
-                // Start listening for notifications
-                agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+            while (retryCount < MAX_RETRIES && !success) {
+                try {
+                    // Check connection first
+                    boolean needsReconnect = !agent.isConnectedToAuctionHouse(selectedHouse.auctionHouseId);
 
-                // Get items with timeout handling
-                AuctionItem[] items =
-                        agent.getItemsFromAuctionHouse(selectedHouse.auctionHouseId);
+                    if (needsReconnect) {
+                        final int currentRetry = retryCount;
+                        Platform.runLater(() ->
+                                log("Connecting to Auction House " + selectedHouse.auctionHouseId
+                                        + (currentRetry > 0 ? " (retry " + currentRetry + "/" + MAX_RETRIES + ")" : "")
+                                        + "..."));
 
-                Platform.runLater(() -> {
-                    itemsTable.getItems().clear();
-                    if (items != null && items.length > 0) {
-                        for (AuctionItem item : items) {
-                            itemsTable.getItems().add(item);
-                        }
-                        log("Loaded " + items.length + " items from Auction House "
-                                + selectedHouse.auctionHouseId);
-                        setStatusMessage("Items loaded successfully", "green");
+                        agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
+                        agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+
+                        Platform.runLater(() -> log("Connected successfully"));
+                        Thread.sleep(300);
                     } else {
-                        log("No items available at Auction House "
-                                + selectedHouse.auctionHouseId);
-                        setStatusMessage("No items available", "orange");
+                        agent.startListeningForNotifications(selectedHouse.auctionHouseId);
                     }
-                });
-            } catch (IOException e) {
-                Platform.runLater(() -> {
-                    log("Error loading items: " + e.getMessage());
-                    setStatusMessage("Failed to load items - " + e.getMessage(), "red");
 
-                    // Clear loading state
-                    itemsTable.getItems().clear();
-                });
-            } catch (ClassNotFoundException e) {
-                Platform.runLater(() -> {
-                    log("Communication error: " + e.getMessage());
-                    setStatusMessage("Communication error", "red");
+                    AuctionItem[] items = agent.getItemsFromAuctionHouse(selectedHouse.auctionHouseId);
 
-                    // Clear loading state
-                    itemsTable.getItems().clear();
-                });
-            } catch (Exception e) {
-                Platform.runLater(() -> {
-                    log("Unexpected error: " + e.getMessage());
-                    setStatusMessage("Unexpected error", "red");
+                    Platform.runLater(() -> {
+                        itemsTable.getItems().clear();
+                        if (items != null && items.length > 0) {
+                            for (AuctionItem item : items) {
+                                itemsTable.getItems().add(item);
+                            }
+                            log("Loaded " + items.length + " items from Auction House "
+                                    + selectedHouse.auctionHouseId);
+                            setStatusMessage("Items loaded successfully", "green");
+                        } else {
+                            log("No items available at Auction House "
+                                    + selectedHouse.auctionHouseId);
+                            setStatusMessage("No items available", "orange");
+                        }
+                    });
 
-                    // Clear loading state
-                    itemsTable.getItems().clear();
-                });
+                    success = true;
+
+                } catch (IOException e) {
+                    retryCount++;
+
+                    if (retryCount >= MAX_RETRIES) {
+                        Platform.runLater(() -> {
+                            log("ERROR: Failed to load items after " + MAX_RETRIES
+                                    + " attempts - " + e.getMessage());
+                            setStatusMessage("Connection failed - auction house may be offline", "red");
+                            itemsTable.getItems().clear();
+                        });
+                    } else {
+                        final int currentAttempt = retryCount;  //
+                        Platform.runLater(() ->
+                                log("Connection attempt " + currentAttempt + " failed, retrying..."));
+
+                        try {
+                            Thread.sleep(1000);
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            break;
+                        }
+                    }
+                } catch (ClassNotFoundException e) {
+                    Platform.runLater(() -> {
+                        log("Communication error: " + e.getMessage());
+                        setStatusMessage("Communication error", "red");
+                        itemsTable.getItems().clear();
+                    });
+                    break;
+                } catch (InterruptedException e) {
+                    Platform.runLater(() -> {
+                        log("Loading interrupted");
+                        setStatusMessage("Loading interrupted", "orange");
+                    });
+                    Thread.currentThread().interrupt();
+                    break;
+                } catch (Exception e) {
+                    Platform.runLater(() -> {
+                        log("Unexpected error: " + e.getMessage());
+                        setStatusMessage("Unexpected error", "red");
+                        itemsTable.getItems().clear();
+                    });
+                    break;
+                }
             }
         }).start();
     }
+
+
 
     // Refresh auction houses dynamically
     private void refreshAuctionHouses() {
@@ -617,6 +658,7 @@ public class AgentApplication extends Application {
     }
 
     // Place bid with validation and error handling
+    // Place bid with validation and error handling
     private void placeBid() {
         if (agent == null) {
             setStatusMessage("Please login first", "red");
@@ -629,8 +671,7 @@ public class AgentApplication extends Application {
             return;
         }
 
-        AuctionItem selectedItem =
-                itemsTable.getSelectionModel().getSelectedItem();
+        AuctionItem selectedItem = itemsTable.getSelectionModel().getSelectedItem();
         if (selectedItem == null) {
             setStatusMessage("Please select an item", "red");
             return;
@@ -679,10 +720,26 @@ public class AgentApplication extends Application {
 
             new Thread(() -> {
                 try {
+                    // ⭐ CHECK AND RECONNECT IF NEEDED
+                    if (!agent.isConnectedToAuctionHouse(selectedHouse.auctionHouseId)) {
+                        Platform.runLater(() ->
+                                log("Connection lost - reconnecting to auction house "
+                                        + selectedHouse.auctionHouseId + "..."));
+
+                        agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
+                        agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+
+                        Platform.runLater(() -> log("Reconnected successfully"));
+
+                        // Small delay to ensure connection is stable
+                        Thread.sleep(500);
+                    }
+
                     boolean success = agent.placeBid(
                             selectedHouse.auctionHouseId,
                             selectedItem.itemId,
                             bidAmount);
+
                     Platform.runLater(() -> {
                         if (success) {
                             log("Bid placed: $"
@@ -698,20 +755,27 @@ public class AgentApplication extends Application {
                     });
                 } catch (IOException e) {
                     Platform.runLater(() -> {
-                        log("Error placing bid: " + e.getMessage());
-                        setStatusMessage("Connection error", "red");
+                        log("ERROR: Connection lost - " + e.getMessage());
+                        setStatusMessage("Connection lost - try reconnecting", "red");
                     });
                 } catch (ClassNotFoundException e) {
                     Platform.runLater(() -> {
                         log("Communication error: " + e.getMessage());
                         setStatusMessage("Communication error", "red");
                     });
+                } catch (InterruptedException e) {
+                    Platform.runLater(() -> {
+                        log("Bid interrupted: " + e.getMessage());
+                        setStatusMessage("Bid interrupted", "red");
+                    });
+                    Thread.currentThread().interrupt();
                 }
             }).start();
         } catch (NumberFormatException e) {
             setStatusMessage("Invalid bid amount", "red");
         }
     }
+
 
     // Helper method for logging
     private void log(String message) {
