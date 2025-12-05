@@ -8,12 +8,37 @@ import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.VBox;
 import javafx.stage.Stage;
+
+/**
+ * JavaFX application that provides a control panel for starting and stopping
+ * a {@link BankServer}. It displays a log area for server messages and a
+ * status bar for the current server state.
+ */
 public class BankApplication extends Application {
 
+    /**
+     * Underlying bank server instance that listens for client connections.
+     */
     private BankServer server;
+
+    /**
+     * Text area used to display log messages from the server lifecycle.
+     */
     private TextArea logArea;
+
+    /**
+     * Label showing the current server status (e.g., running, not running, error).
+     */
     private Label statusLabel;
 
+    /**
+     * Entry point for the JavaFX application. Initializes the primary window,
+     * sets up the layout, and wires up the close handler to cleanly stop the server.
+     *
+     * @param primaryStage the primary stage for this application, onto which
+     *                     the application scene can be set
+     * @throws Exception if an error occurs during initialization
+     */
     @Override
     public void start(Stage primaryStage) throws Exception {
         primaryStage.setTitle("Distributed Auction - Bank Server");
@@ -51,6 +76,12 @@ public class BankApplication extends Application {
         primaryStage.show();
     }
 
+    /**
+     * Creates the top control panel containing the port field and
+     * buttons to start and stop the {@link BankServer}.
+     *
+     * @return a configured {@link VBox} containing the control widgets
+     */
     private VBox createTopPanel() {
         VBox vbox = new VBox(10);
         vbox.setPadding(new Insets(10));
@@ -98,6 +129,11 @@ public class BankApplication extends Application {
         return vbox;
     }
 
+    /**
+     * Creates the bottom status panel showing the current server status.
+     *
+     * @return a {@link VBox} containing the status label
+     */
     private VBox createBottomPanel() {
         VBox vbox = new VBox(5);
         vbox.setPadding(new Insets(10));
@@ -110,6 +146,12 @@ public class BankApplication extends Application {
         return vbox;
     }
 
+    /**
+     * Starts the {@link BankServer} on the given port in a background thread
+     * so that the JavaFX application thread remains responsive.
+     *
+     * @param port the TCP port on which the server should listen
+     */
     private void startServerWithPort(int port) {
         new Thread(() -> {
             try {
@@ -124,10 +166,20 @@ public class BankApplication extends Application {
         }).start();
     }
 
+    /**
+     * Updates the status label text on the JavaFX Application Thread.
+     *
+     * @param status human-readable description of the current server state
+     */
     private void updateStatus(String status) {
         javafx.application.Platform.runLater(() -> statusLabel.setText("Status: " + status));
     }
 
+    /**
+     * Main entry point when launching the application from the command line.
+     *
+     * @param args command-line arguments passed to the application
+     */
     public static void main(String[] args) {
         launch(args);
     }
