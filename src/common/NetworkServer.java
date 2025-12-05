@@ -1,10 +1,8 @@
 package common;
 
 import java.io.*;
-import java.net.InetAddress;
-import java.net.ServerSocket;
-import java.net.Socket;
-import java.net.UnknownHostException;
+import java.net.*;
+import java.util.Enumeration;
 
 
 /**
@@ -73,15 +71,43 @@ public class NetworkServer {
 
     /**
      * Returns the IP address of the local host that this server is running on.
-     * <p>
-     * This is typically used by clients to connect to the server when all
-     * components run on the same machine or local network.
+     * This method attempts to find a non-loopback, non-link-local IPv4 address.
      *
-     * @return the string representation of the local host address (for example, {@code "127.0.0.1"})
-     * @throws UnknownHostException if the local host name could not be resolved into an address
+     * @return the string representation of the local host address
+     * @throws UnknownHostException if no suitable address could be found
      */
     public String getHost() throws UnknownHostException {
-        return InetAddress.getLocalHost().getHostAddress();
+        try {
+            // Try to find a suitable network interface
+            Enumeration<NetworkInterface> interfaces = NetworkInterface.getNetworkInterfaces();
+
+            while (interfaces.hasMoreElements()) {
+                NetworkInterface networkInterface = interfaces.nextElement();
+
+                // Skip loopback and inactive interfaces
+                if (networkInterface.isLoopback() || !networkInterface.isUp()) {
+                    continue;
+                }
+
+                Enumeration<InetAddress> addresses = networkInterface.getInetAddresses();
+                while (addresses.hasMoreElements()) {
+                    InetAddress address = addresses.nextElement();
+
+                    // We want IPv4, non-loopback, non-link-local
+                    if (address instanceof Inet4Address &&
+                            !address.isLoopbackAddress() &&
+                            !address.isLinkLocalAddress()) {
+                        return address.getHostAddress();
+                    }
+                }
+            }
+
+            // Fallback: return localhost if no suitable address found
+            return InetAddress.getLocalHost().getHostAddress();
+
+        } catch (SocketException e) {
+            throw new UnknownHostException("Failed to get network interfaces: " + e.getMessage());
+        }
     }
 
     /**
