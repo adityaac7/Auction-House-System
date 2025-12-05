@@ -15,15 +15,12 @@ import java.net.Socket;
  * Runs on its own thread and deals with requests like getting items or placing bids.
  */
 public class AuctionHouseClientHandler implements Runnable {
-    private final Socket socket;
-    private final AuctionHouse auctionHouse;
+    private Socket socket;
+    private AuctionHouse auctionHouse;
     private NetworkClient agentClient;
     private Integer agentAccountNumber = null;
 
-    /**
-     * Basic setup for this handler.
-     * Just save socket + AH ref, rest happens in run().
-     */
+    // FIXED: Socket first, then AuctionHouse
     public AuctionHouseClientHandler(Socket socket, AuctionHouse auctionHouse) {
         this.socket = socket;
         this.auctionHouse = auctionHouse;
@@ -32,17 +29,15 @@ public class AuctionHouseClientHandler implements Runnable {
     @Override
     public void run() {
         try {
-            // create I/O streams for this agent
             ObjectOutputStream out = new ObjectOutputStream(socket.getOutputStream());
             out.flush();
             ObjectInputStream in = new ObjectInputStream(socket.getInputStream());
             agentClient = new NetworkClient(socket, out, in);
 
-            System.out.println("[AUCTION HOUSE] Agent handler started for "
-                    + socket.getInetAddress());
+            System.out.println("[AUCTION HOUSE] Agent handler started for " +
+                    socket.getInetAddress());
 
-            // keep reading messages while agent stays connected
-            while (agentClient.isConnected()) {
+            while (!socket.isClosed()) {
                 Message message = agentClient.receiveMessage();
                 Message response = handleMessage(message);
 
@@ -50,71 +45,51 @@ public class AuctionHouseClientHandler implements Runnable {
                     agentClient.sendMessage(response);
                 }
             }
-
         } catch (EOFException e) {
-            System.out.println("[AUCTION HOUSE] Agent disconnected normally");
+            System.out.println("[AUCTION HOUSE] Agent disconnected");
         } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[AUCTION HOUSE] Error in client handler: " + e.getMessage());
+            System.out.println("[AUCTION HOUSE] Error handling agent: " + e.getMessage());
         } finally {
-            closeConnection();
+            if (agentAccountNumber != null) {
+                auctionHouse.unregisterAgentConnection(agentAccountNumber);
+            }
+            try {
+                if (socket != null && !socket.isClosed()) {
+                    socket.close();
+                }
+            } catch (IOException e) {
+                // Ignore
+            }
         }
     }
 
-    /**
-     * Based on message type, call right function inside AuctionHouse.
-     */
     private Message handleMessage(Message message) {
         String messageType = message.getMessageType();
 
         switch (messageType) {
-
             case "GET_ITEMS":
-                // agent just wants list of items
-                return auctionHouse.handleGetItemsRequest();
+                return auctionHouse.getItems();
 
             case "PLACE_BID":
                 AuctionMessages.PlaceBidRequest bidRequest =
                         (AuctionMessages.PlaceBidRequest) message;
 
-                // save agent so we can notify them later (e.g., OUTBID / YOU WON)
                 agentAccountNumber = bidRequest.agentAccountNumber;
                 auctionHouse.registerAgentConnection(agentAccountNumber, agentClient);
 
-                return auctionHouse.handlePlaceBidRequest(
-                        bidRequest.itemId,
-                        bidRequest.agentAccountNumber,
-                        bidRequest.bidAmount);
+                return auctionHouse.placeBid(bidRequest.itemId,
+                        bidRequest.agentAccountNumber, bidRequest.bidAmount);
 
             case "CONFIRM_WINNER":
                 AuctionMessages.ConfirmWinnerRequest confirmRequest =
                         (AuctionMessages.ConfirmWinnerRequest) message;
-
-                // agent is confirming they won and payment was done
-                return auctionHouse.handleConfirmWinnerRequest(
-                        confirmRequest.itemId,
-                        confirmRequest.agentAccountNumber
-                );
+                return auctionHouse.confirmWinner(confirmRequest.itemId,
+                        confirmRequest.agentAccountNumber);
 
             default:
                 System.out.println("[AUCTION HOUSE] Unknown message type: " + messageType);
                 return null;
         }
     }
-
-    /**
-     * Close socket and remove this agent from AH tracking list.
-     */
-    private void closeConnection() {
-        try {
-            if (agentAccountNumber != null) {
-                // remove this agent since they disconnected
-                auctionHouse.unregisterAgentConnection(agentAccountNumber);
-            }
-            if (socket != null && !socket.isClosed()) {
-                socket.close();
-            }
-        } catch (IOException ignored) {
-
-        }
-    }
 }
+
