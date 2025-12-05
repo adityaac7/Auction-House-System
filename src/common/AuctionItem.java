@@ -1,9 +1,8 @@
-package common;
-
 import java.io.Serializable;
 
 /**
- * Represents an item being auctioned
+ * It shows the item being represented.
+ * we showing the all the information here for the auction flow
  */
 public class AuctionItem implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -14,7 +13,7 @@ public class AuctionItem implements Serializable {
     public double minimumBid;
     public double currentBid;
     public int currentBidderAccountNumber;
-    public long auctionEndTime; // Timestamp when auction ends (0 if no bid yet)
+    public long auctionEndTime;
 
     public AuctionItem(int houseId, int itemId, String description, double minimumBid) {
         this.houseId = houseId;
