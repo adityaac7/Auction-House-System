@@ -22,7 +22,7 @@ public class NetworkServer {
      * @throws IOException if the underlying {@link ServerSocket} cannot be created
      */
     public NetworkServer(int port) throws IOException {
-        this.serverSocket = new ServerSocket(port);
+        this.serverSocket = new ServerSocket(port, 50, InetAddress.getByName("0.0.0.0"));
     }
 
     /**

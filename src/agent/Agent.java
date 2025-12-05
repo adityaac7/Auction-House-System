@@ -31,9 +31,6 @@ import java.util.concurrent.TimeUnit;
  * for each auction house connection to handle asynchronous notifications.
  * Thread-safe operations are ensured through synchronization and concurrent
  * data structures.
- *
- * @author CS351 Project Team
- * @version 1.0
  */
 public class Agent {
 
