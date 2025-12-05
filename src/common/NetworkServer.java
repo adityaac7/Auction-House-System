@@ -4,7 +4,6 @@ import java.io.*;
 import java.net.*;
 import java.util.Enumeration;
 
-
 /**
  * Utility class for handling simple TCP server connections.
  * Wraps a {@link ServerSocket} and exposes convenience methods
@@ -34,7 +33,7 @@ public class NetworkServer {
 
     /**
      * Stops the server and closes the underlying {@link ServerSocket}.
-     * After this call, {isRunning()} returns {@code false} and
+     * After this call, {@link #isRunning()} returns {@code false} and
      * {@link #acceptConnection()} will fail with an {@link IOException}.
      */
     public void stop() {
@@ -49,8 +48,8 @@ public class NetworkServer {
     }
 
     /**
-     * Blocks until a client connects, then returns the accepted {@Socket}.
-     * @return a connected {@Socket} for communicating with the client
+     * Blocks until a client connects, then returns the accepted {@link Socket}.
+     * @return a connected {@link Socket} for communicating with the client
      * @throws IOException if the server is not running or an I/O error occurs
      * while waiting for a connection
      */
@@ -60,6 +59,7 @@ public class NetworkServer {
         }
         return serverSocket.accept();
     }
+
     /**
      * Returns the local port number that this server is bound to.
      *
@@ -70,10 +70,11 @@ public class NetworkServer {
     }
 
     /**
-     * Returns the IP address of the local host that this server is running on.
+     * Returns the actual network IP address of this server.
      * This method attempts to find a non-loopback, non-link-local IPv4 address.
+     * This is used for cross-device communication in distributed systems.
      *
-     * @return the string representation of the local host address
+     * @return the string representation of the network IP address (e.g., "192.168.1.100")
      * @throws UnknownHostException if no suitable address could be found
      */
     public String getHost() throws UnknownHostException {
@@ -97,12 +98,14 @@ public class NetworkServer {
                     if (address instanceof Inet4Address &&
                             !address.isLoopbackAddress() &&
                             !address.isLinkLocalAddress()) {
+                        System.out.println("[NETWORK] Found network IP: " + address.getHostAddress());
                         return address.getHostAddress();
                     }
                 }
             }
 
             // Fallback: return localhost if no suitable address found
+            System.out.println("[NETWORK] Warning: No network interface found, using localhost");
             return InetAddress.getLocalHost().getHostAddress();
 
         } catch (SocketException e) {
@@ -112,7 +115,7 @@ public class NetworkServer {
 
     /**
      * Indicates whether the server is currently marked as running.
-     * <p>
+     *
      * Note that this flag is independent of the underlying socket state; it simply
      * reflects whether {@link #start()} has been called without a subsequent {@link #stop()}.
      *

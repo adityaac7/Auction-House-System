@@ -7,6 +7,7 @@ import common.NetworkClient;
 import messages.AuctionMessages;
 import messages.BankMessages;
 
+import java.io.EOFException;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -379,74 +380,66 @@ public class Agent {
                             if (message instanceof AuctionMessages.BidStatusNotification) {
                                 AuctionMessages.BidStatusNotification n =
                                         (AuctionMessages.BidStatusNotification) message;
+
                                 System.out.println("[AGENT] Notification for item "
                                         + n.itemId + ": " + n.status + " - " + n.message);
+
                                 if (uiCallback != null) {
                                     uiCallback.onBidStatusChanged(
                                             n.itemId, n.status, n.message);
                                 }
+
                                 if ("WINNER".equals(n.status)) {
                                     confirmWinner(auctionHouseId, n.itemId, n.finalPrice,
                                             n.auctionHouseAccountNumber, n.itemDescription);
                                 }
                             } else {
-                                BlockingQueue<Message> queue =
-                                        responseQueues.get(auctionHouseId);
+                                BlockingQueue<Message> queue = responseQueues.get(auctionHouseId);
                                 if (queue != null) {
-                                    try {
-                                        queue.put(message);
-                                    } catch (InterruptedException e) {
-                                        Thread.currentThread().interrupt();
-                                        return;
-                                    }
-                                } else {
-                                    System.out.println("[AGENT] WARNING: Dropping message type "
-                                            + message.getMessageType()
-                                            + " - no response queue for AH " + auctionHouseId);
+                                    queue.offer(message, 5, TimeUnit.SECONDS);
                                 }
                             }
-                        } catch (IOException e) {
+                        } catch (java.net.SocketTimeoutException e) {
+                            // Timeout is OK - just means no messages, connection still alive
+                            // Don't log this, it's normal
+                            continue;
+                        } catch (EOFException | IOException e) {
                             System.out.println("[AGENT] Connection lost to auction house "
-                                    + auctionHouseId);
+                                    + auctionHouseId + ": " + e.getMessage());
                             break;
                         } catch (ClassNotFoundException e) {
-                            System.out.println("[AGENT] Invalid message received from auction house "
+                            System.out.println("[AGENT] Invalid message from auction house "
                                     + auctionHouseId + ": " + e.getMessage());
+                            break;
                         }
                     }
 
-                    return;
+                    System.out.println("[AGENT] Listener stopped for auction house " + auctionHouseId);
+                    return; // Exit successfully
 
                 } catch (Exception e) {
                     retries++;
-                    System.out.println("[AGENT] Error listening for notifications (attempt "
-                            + retries + "/3): " + e.getMessage());
-                    if (retries >= 3) {
-                        System.out.println("[AGENT] Failed to maintain connection after 3 attempts");
-                        return;
-                    }
-                    try {
-                        Thread.sleep(1000);
-                    } catch (InterruptedException ie) {
-                        Thread.currentThread().interrupt();
-                        return;
+                    System.out.println("[AGENT] Listener error (attempt " + retries + "/3): "
+                            + e.getMessage());
+                    if (retries < 3) {
+                        try {
+                            Thread.sleep(2000); // Wait 2 seconds before retry
+                        } catch (InterruptedException ie) {
+                            Thread.currentThread().interrupt();
+                            return;
+                        }
                     }
                 }
             }
+            System.out.println("[AGENT] Listener failed after " + retries + " attempts");
         });
 
-        listenerThread.setDaemon(true);  // Use daemon threads for cleanup
-        listenerThread.setName("Listener-AH-" + auctionHouseId);
+        listenerThread.setDaemon(true);
+        listenerThread.setName("AH-" + auctionHouseId + "-Listener");
         listenerThreads.put(auctionHouseId, listenerThread);
         listenerThread.start();
-
-        // Give the thread a moment to start before returning
-        try {
-            Thread.sleep(100);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
     }
+
 
     /**
      * Processes a winning bid by transferring funds and confirming the purchase

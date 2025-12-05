@@ -462,15 +462,44 @@ public class AgentApplication extends Application {
                                                    String status,
                                                    String message) {
                         Platform.runLater(() -> {
-                            log("[" + status + "] Item " + itemId + ": " + message);
                             String color = "blue";
+
                             if ("WINNER".equals(status)) {
+                                // This agent won the auction
+                                log("[✓ YOU WON] Item " + itemId + ": " + message);
                                 color = "green";
-                            } else if ("OUTBID".equals(status)
-                                    || "REJECTED".equals(status)) {
+                                setStatusMessage("YOU WON: " + message, color);
+
+                            } else if ("OUTBID".equals(status)) {
+                                // This agent was outbid
+                                log("[✗ OUTBID] Item " + itemId + ": " + message);
                                 color = "red";
+                                setStatusMessage("OUTBID: " + message, color);
+
+                            } else if ("ITEM_SOLD".equals(status)) {
+                                // Check if this agent won
+                                if (message.contains("Agent " + agent.getAccountNumber())) {
+                                    log("[✓ YOU WON] " + message);
+                                    color = "green";
+                                    setStatusMessage("Item purchased!", color);
+                                } else {
+                                    // Another agent won - just update UI silently
+                                    // Don't spam the log for items other agents bought
+                                    color = "orange";
+                                    setStatusMessage("Item sold to another agent", color);
+                                }
+
+                            } else if ("REJECTED".equals(status)) {
+                                log("[✗ REJECTED] Item " + itemId + ": " + message);
+                                color = "red";
+                                setStatusMessage("Bid rejected: " + message, color);
+
+                            } else {
+                                // Generic status
+                                log("[" + status + "] Item " + itemId + ": " + message);
+                                setStatusMessage(status + ": " + message, color);
                             }
-                            setStatusMessage(status + ": " + message, color);
+
                             // Auto-refresh items after status change
                             loadItems();
                         });
@@ -541,6 +570,7 @@ public class AgentApplication extends Application {
                         final int currentRetry = retryCount;
                         Platform.runLater(() ->
                                 log("Connecting to Auction House " + selectedHouse.auctionHouseId
+                                        + " at " + selectedHouse.host + ":" + selectedHouse.port  // ← Shows IP
                                         + (currentRetry > 0 ? " (retry " + currentRetry + "/" + MAX_RETRIES + ")" : "")
                                         + "..."));
 
@@ -584,7 +614,7 @@ public class AgentApplication extends Application {
                             itemsTable.getItems().clear();
                         });
                     } else {
-                        final int currentAttempt = retryCount;  //
+                        final int currentAttempt = retryCount;
                         Platform.runLater(() ->
                                 log("Connection attempt " + currentAttempt + " failed, retrying..."));
 
@@ -620,6 +650,7 @@ public class AgentApplication extends Application {
             }
         }).start();
     }
+
 
 
 
