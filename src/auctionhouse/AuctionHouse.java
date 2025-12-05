@@ -9,42 +9,118 @@ import common.NetworkClient;
 import messages.AuctionMessages;
 
 /**
- * Represents the Auction House in the distributed auction system.
- * This class manages the lifecycle of auction items, handles communication
- * with the Bank and connected Agents, and processes all bidding logic.
+ * Manages auction items and handles bidding in a distributed auction system.
+ *
+ * <p>This class coordinates the auction process by maintaining a collection of items
+ * available for bidding, managing agent connections, and handling bid placement and
+ * winner confirmation. It communicates with a bank server to block and release funds
+ * during the bidding process and notifies agents of bid status changes and auction results.
+ *
+ * <p>Key responsibilities include:
+ * <ul>
+ *   <li>Maintaining auction items through {@link AuctionItemManager} instances</li>
+ *   <li>Processing bid requests from agents and coordinating with the bank</li>
+ *   <li>Broadcasting notifications to connected agents when items are sold or bids are outbid</li>
+ *   <li>Managing fund blocking and release for bidders</li>
+ *   <li>Providing activity logging through callback interface</li>
+ * </ul>
+ *
+ * <p>Thread Safety: This class uses concurrent data structures and synchronized methods
+ * to support concurrent access from multiple agents.
+ *
+ * @see AuctionItemManager
+ * @see AuctionMessages
+ * @see NetworkClient
  */
 public class AuctionHouse {
 
+    /** The unique identifier for this auction house. */
     private int auctionHouseId;
+
+    /** The bank account number for this auction house. */
     private int auctionHouseAccountNumber;
+
+    /** Network client for communicating with the bank server. */
     private NetworkClient bankClient;
 
-    // Manages the collection of auction items and valid bid checking
-    private AuctionItemManager itemManager;
+    /** Map of item IDs to their respective auction item managers. */
+    private Map<Integer, AuctionItemManager> items;
 
-    // Stores active connections to agents, mapped by their account number
+    /** Map of agent account numbers to their network connections. */
     private Map<Integer, NetworkClient> agentConnections;
 
-    // Pre-defined data for generating random items
+    /** Counter for generating unique item IDs. */
+    private int nextItemId;
+
+    /** Array of predefined item descriptions for random item generation. */
     private String[] itemDescriptions;
+
+    /** Array of predefined minimum bid amounts for random item generation. */
     private double[] itemMinimumBids;
 
-    // Callback interface for updating the GUI with logs and events
+    /** Callback interface for GUI activity logging. */
     private AuctionHouseCallback callback;
 
     /**
-     * Interface to allow the AuctionHouse to communicate events back to the GUI.
+     * Callback interface for auction activity notifications.
+     *
+     * <p>Implementations of this interface receive real-time notifications about
+     * auction events such as bids placed, bids rejected, agents outbid, and items sold.
+     * This is typically used for GUI updates and activity logging.
      */
     public interface AuctionHouseCallback {
+        /**
+         * Called when a bid is successfully placed on an item.
+         *
+         * @param itemId the unique identifier of the item
+         * @param itemDesc the description of the item
+         * @param agentAccount the agent's bank account number
+         * @param bidAmount the amount of the bid
+         */
         void onBidPlaced(int itemId, String itemDesc, int agentAccount, double bidAmount);
+
+        /**
+         * Called when a bid is rejected.
+         *
+         * @param itemId the unique identifier of the item
+         * @param itemDesc the description of the item
+         * @param agentAccount the agent's bank account number
+         * @param bidAmount the attempted bid amount
+         * @param reason the reason for rejection
+         */
         void onBidRejected(int itemId, String itemDesc, int agentAccount,
                            double bidAmount, String reason);
+
+        /**
+         * Called when an agent is outbid by another agent.
+         *
+         * @param itemId the unique identifier of the item
+         * @param itemDesc the description of the item
+         * @param previousBidder the account number of the agent who was outbid
+         * @param newBidder the account number of the new highest bidder
+         * @param newBid the new highest bid amount
+         */
         void onAgentOutbid(int itemId, String itemDesc, int previousBidder,
                            int newBidder, double newBid);
+
+        /**
+         * Called when an item is sold and removed from the auction.
+         *
+         * @param itemId the unique identifier of the item
+         * @param itemDesc the description of the item
+         * @param winner the account number of the winning agent
+         * @param finalPrice the final sale price
+         */
         void onItemSold(int itemId, String itemDesc, int winner, double finalPrice);
     }
 
-    // Default constructor that starts with 5 items
+    /**
+     * Constructs an auction house with default number of initial items (5).
+     *
+     * @param auctionHouseId the unique identifier for this auction house
+     * @param auctionHouseAccountNumber the bank account number for this auction house
+     * @param bankClient the network client for communicating with the bank
+     */
     public AuctionHouse(int auctionHouseId,
                         int auctionHouseAccountNumber,
                         NetworkClient bankClient) {
@@ -52,8 +128,15 @@ public class AuctionHouse {
     }
 
     /**
-     * Initializes the Auction House with specific ID and bank connection.
-     * @param initialItemCount Number of items to auto-generate upon startup.
+     * Constructs an auction house with specified number of initial items.
+     *
+     * <p>Initializes the auction house with concurrent data structures, registers
+     * with the bank, and creates the specified number of random auction items.
+     *
+     * @param auctionHouseId the unique identifier for this auction house
+     * @param auctionHouseAccountNumber the bank account number for this auction house
+     * @param bankClient the network client for communicating with the bank
+     * @param initialItemCount the number of items to create at initialization
      */
     public AuctionHouse(int auctionHouseId,
                         int auctionHouseAccountNumber,
@@ -62,24 +145,19 @@ public class AuctionHouse {
         this.auctionHouseId = auctionHouseId;
         this.auctionHouseAccountNumber = auctionHouseAccountNumber;
         this.bankClient = bankClient;
-
-        // Initialize the manager that handles item storage and logic
-        this.itemManager = new AuctionItemManager(auctionHouseId);
-
+        this.items = new ConcurrentHashMap<>();
         this.agentConnections = new ConcurrentHashMap<>();
+        this.nextItemId = 1;
 
-        // Helper arrays for generating random item details
         this.itemDescriptions = new String[] {
                 "Vintage Watch", "Rare Painting", "Antique Vase"
         };
 
-        // Helper array for random minimum bid amounts
         this.itemMinimumBids = new double[] {
                 100.0, 500.0, 200.0, 5000.0, 1000.0,
                 150.0, 300.0, 75.0, 800.0, 50.0
         };
 
-        // Create the initial set of items
         for (int i = 0; i < initialItemCount; i++) {
             addNewItem();
         }
@@ -88,81 +166,102 @@ public class AuctionHouse {
                 + initialItemCount + " items");
     }
 
-    // ===== Getters and Setters =====
-
+    /**
+     * Sets the callback interface for auction activity logging.
+     *
+     * @param callback the callback implementation to receive auction event notifications,
+     *                 or null to disable callbacks
+     */
     public void setCallback(AuctionHouseCallback callback) {
         this.callback = callback;
     }
 
+    /**
+     * Gets the currently registered callback interface.
+     *
+     * @return the current callback implementation, or null if none is set
+     */
     public AuctionHouseCallback getCallback() {
         return callback;
     }
 
+    /**
+     * Gets the unique identifier for this auction house.
+     *
+     * @return the auction house ID
+     */
     public int getAuctionHouseId() {
         return auctionHouseId;
     }
 
+    /**
+     * Gets the bank account number associated with this auction house.
+     *
+     * @return the auction house's bank account number
+     */
     public int getAuctionHouseAccountNumber() {
         return auctionHouseAccountNumber;
     }
 
     /**
-     * Registers an agent connection so the house can send notifications later.
+     * Registers an agent's network connection for receiving notifications.
+     *
+     * <p>Once registered, the agent will receive bid status updates and item sold
+     * notifications through this connection.
+     *
+     * @param agentAccountNumber the agent's bank account number
+     * @param connection the network client for communicating with the agent
      */
     public void registerAgentConnection(int agentAccountNumber, NetworkClient connection) {
         agentConnections.put(agentAccountNumber, connection);
     }
 
     /**
-     * Removes an agent connection when they disconnect.
+     * Unregisters an agent's network connection.
+     *
+     * <p>The agent will no longer receive notifications after being unregistered.
+     *
+     * @param agentAccountNumber the agent's bank account number to unregister
      */
     public void unregisterAgentConnection(int agentAccountNumber) {
         agentConnections.remove(agentAccountNumber);
     }
 
     /**
-     * Retrieves the current snapshot of all items.
-     * Synchronized to ensure thread safety when accessing the item list.
+     * Retrieves all current auction items available for bidding.
+     *
+     * @return a response containing an array of all auction items and success status
      */
     public synchronized AuctionMessages.GetItemsResponse getItems() {
         try {
-            // Retrieve all items from the manager
-            Collection<AuctionItem> itemsCollection = itemManager.getAllItems();
-            AuctionItem[] itemArray = itemsCollection.toArray(new AuctionItem[0]);
-
+            AuctionItem[] itemArray = items.values().stream()
+                    .map(AuctionItemManager::getItem)
+                    .toArray(AuctionItem[]::new);
             return new AuctionMessages.GetItemsResponse(
                     true, itemArray, "Items retrieved successfully");
         } catch (Exception e) {
-            e.printStackTrace();
             return new AuctionMessages.GetItemsResponse(
                     false, new AuctionItem[0], "Failed to retrieve items");
         }
     }
 
-    // Wrappers for handling network requests
-    public AuctionMessages.PlaceBidResponse handlePlaceBidRequest(int itemId, int agentAccountNumber, double bidAmount) {
-        return placeBid(itemId, agentAccountNumber, bidAmount);
-    }
-
-    public AuctionMessages.GetItemsResponse handleGetItemsRequest() {
-        return getItems();
-    }
-
-    public AuctionMessages.ConfirmWinnerResponse handleConfirmWinnerRequest(int itemId, int agentAccountNumber) {
-        return confirmWinner(itemId, agentAccountNumber);
-    }
-
     /**
-     * Processes a bid request from an agent.
-     * Validates the item existence and delegates the bid logic to the ItemManager.
+     * Processes a bid request for a specific auction item.
+     *
+     * <p>This method validates the bid amount against the item's current bid and minimum
+     * bid requirements. If accepted, the bid is recorded and the callback is notified.
+     * If rejected, the reason is communicated through the callback and response.
+     *
+     * @param itemId the unique identifier of the item being bid on
+     * @param agentAccountNumber the agent's bank account number placing the bid
+     * @param bidAmount the amount being bid
+     * @return a response indicating whether the bid was accepted or rejected with details
      */
     public AuctionMessages.PlaceBidResponse placeBid(int itemId,
                                                      int agentAccountNumber,
                                                      double bidAmount) {
-        // Retrieve the item object
-        AuctionItem item = itemManager.getItem(itemId);
-
-        if (item == null) {
+        AuctionItemManager manager = items.get(itemId);
+        if (manager == null) {
             if (callback != null) {
                 callback.onBidRejected(itemId, "Unknown", agentAccountNumber,
                         bidAmount, "Item not found");
@@ -171,31 +270,13 @@ public class AuctionHouse {
                     false, "REJECTED", "Item not found", bidAmount);
         }
 
-        String itemDesc = item.description;
-
-        // Track who the previous bidder was to send an outbid notification
-        int previousBidder = item.currentBidderAccountNumber;
-
-        // Attempt to place the bid via the manager
-        String status = itemManager.placeBid(itemId, String.valueOf(agentAccountNumber), bidAmount);
+        String itemDesc = manager.getItem().description;
+        String status = manager.placeBid(agentAccountNumber, bidAmount);
         boolean success = "ACCEPTED".equals(status);
 
-        if (success) {
-            // Update GUI
-            if (callback != null) {
-                callback.onBidPlaced(itemId, itemDesc, agentAccountNumber, bidAmount);
-            }
-
-            // Notify the previous bidder that they have been outbid
-            if (previousBidder != -1 && previousBidder != agentAccountNumber) {
-                notifyAgent(previousBidder, itemId, "OUTBID",
-                        "You have been outbid on " + itemDesc, 0, auctionHouseAccountNumber, itemDesc);
-
-                if (callback != null) {
-                    callback.onAgentOutbid(itemId, itemDesc, previousBidder, agentAccountNumber, bidAmount);
-                }
-            }
-        } else if (callback != null) {
+        if (success && callback != null) {
+            callback.onBidPlaced(itemId, itemDesc, agentAccountNumber, bidAmount);
+        } else if (!success && callback != null) {
             callback.onBidRejected(itemId, itemDesc, agentAccountNumber,
                     bidAmount, status);
         }
@@ -205,8 +286,21 @@ public class AuctionHouse {
     }
 
     /**
-     * Confirms that an item has been sold to a specific agent.
-     * This is called after the agent successfully transfers funds to the bank.
+     * Confirms the winner and removes the item from the auction after payment.
+     *
+     * <p>This method should be called by the agent AFTER successfully transferring funds
+     * to the auction house. It performs the following operations in sequence:
+     * <ol>
+     *   <li>Releases funds for all losing bidders</li>
+     *   <li>Logs the sale through the callback interface</li>
+     *   <li>Broadcasts ITEM_SOLD notification to all connected agents</li>
+     *   <li>Removes the item from the auction map</li>
+     *   <li>Shuts down the item manager's timer executor</li>
+     * </ol>
+     *
+     * @param itemId the unique identifier of the sold item
+     * @param agentAccountNumber the winning agent's bank account number
+     * @return a response indicating success or failure with an appropriate message
      */
     public AuctionMessages.ConfirmWinnerResponse confirmWinner(int itemId,
                                                                int agentAccountNumber) {
@@ -214,13 +308,13 @@ public class AuctionHouse {
         System.out.println("[AUCTION HOUSE] Processing confirmWinner for Item " + itemId);
         System.out.println("[AUCTION HOUSE] Agent: " + agentAccountNumber);
 
-        AuctionItem item = itemManager.getItem(itemId);
-        if (item == null) {
+        AuctionItemManager manager = items.get(itemId);
+        if (manager == null) {
             System.out.println("[AUCTION HOUSE] ERROR: Item " + itemId + " not found");
             return new AuctionMessages.ConfirmWinnerResponse(false, "Item not found");
         }
 
-        // Verify the agent claiming the win is actually the current highest bidder
+        AuctionItem item = manager.getItem();
         if (item.currentBidderAccountNumber != agentAccountNumber) {
             System.out.println("[AUCTION HOUSE] ERROR: Agent " + agentAccountNumber
                     + " is not the winner (winner is " + item.currentBidderAccountNumber + ")");
@@ -232,27 +326,38 @@ public class AuctionHouse {
         int winnerAccount = item.currentBidderAccountNumber;
         String itemDesc = item.description;
 
-        System.out.println("[AUCTION HOUSE] Step 1: Logging sale...");
+        System.out.println("[AUCTION HOUSE] Step 1: Releasing funds for losing bidders...");
 
-        // Update GUI with sale info
+        // Release funds for all losers BEFORE removing item
+        manager.releaseLoserFunds(winnerAccount);
+
+        System.out.println("[AUCTION HOUSE] Step 2: Logging sale...");
+
+        // Log the sale
         if (callback != null) {
             callback.onItemSold(itemId, itemDesc, winnerAccount, soldPrice);
         }
 
-        System.out.println("[AUCTION HOUSE] Step 2: Broadcasting ITEM_SOLD to all agents...");
+        System.out.println("[AUCTION HOUSE] Step 3: Broadcasting ITEM_SOLD to all agents...");
 
-        // Notify all connected agents that the item is sold
+        // Broadcast ITEM_SOLD to ALL agents so they can remove it from their view
         broadcastToAllAgents(itemId, "ITEM_SOLD",
                 "Item " + itemId + " (" + itemDesc + ") sold to Agent " + winnerAccount
                         + " for $" + String.format("%.2f", soldPrice));
 
-        System.out.println("[AUCTION HOUSE] Step 3: Closing item...");
+        System.out.println("[AUCTION HOUSE] Step 4: Removing item from auction...");
 
-        // Mark the item as closed in the manager
-        itemManager.closeItem(itemId);
+        // Remove the item from the map
+        items.remove(itemId);
+
+        System.out.println("[AUCTION HOUSE] Step 5: Shutting down item manager...");
+
+        // Shut down the timer executor
+        manager.shutdown();
 
         System.out.println("[AUCTION HOUSE] ✓ Item " + itemId + " sold to agent "
                 + winnerAccount + " for $" + soldPrice);
+        System.out.println("[AUCTION HOUSE] ✓ Item removed from auction list");
         System.out.println("[AUCTION HOUSE] ========================================");
 
         return new AuctionMessages.ConfirmWinnerResponse(
@@ -260,8 +365,15 @@ public class AuctionHouse {
     }
 
     /**
-     * Broadcasts a status message to all connected agents.
-     * Automatically cleans up connections if an agent has disconnected.
+     * Broadcasts a notification to all connected agents.
+     *
+     * <p>This method sends the same message to every registered agent connection.
+     * Connections that fail are automatically removed from the registry to prevent
+     * future communication attempts with disconnected agents.
+     *
+     * @param itemId the item ID associated with the notification
+     * @param status the status string (e.g., "ITEM_SOLD", "OUTBID")
+     * @param message the notification message text
      */
     public void broadcastToAllAgents(int itemId, String status, String message) {
         List<Integer> disconnected = new ArrayList<>();
@@ -277,19 +389,25 @@ public class AuctionHouse {
                                 auctionHouseAccountNumber, "");
                 connection.sendMessage(notification);
             } catch (IOException e) {
-                // Track disconnected agents to remove them safely later
                 disconnected.add(agentAccount);
             }
         }
 
-        // Remove any agents that failed to receive the message
+        // Clean up disconnected agents
         for (int account : disconnected) {
             agentConnections.remove(account);
         }
     }
 
     /**
-     * Helper method to send a message to the Bank and block waiting for a response.
+     * Sends a message to the bank and waits for a response.
+     *
+     * <p>This is a synchronous blocking call that will wait until the bank
+     * responds or an error occurs.
+     *
+     * @param message the message to send to the bank
+     * @return the bank's response message
+     * @throws Exception if communication with the bank fails
      */
     public Message sendToBankAndWait(Message message) throws Exception {
         bankClient.sendMessage(message);
@@ -297,7 +415,18 @@ public class AuctionHouse {
     }
 
     /**
-     * Sends a notification to a specific agent (e.g., when they are outbid).
+     * Notifies a specific agent about a bid status change or auction result.
+     *
+     * <p>If the agent's connection is no longer valid, it is automatically removed
+     * from the registry to prevent future communication errors.
+     *
+     * @param agentAccountNumber the agent's bank account number
+     * @param itemId the item ID associated with the notification
+     * @param status the status string describing the notification type
+     * @param message the notification message text
+     * @param finalPrice the final price of the item (relevant for winning bids)
+     * @param auctionHouseAccountNumber the auction house's account number for payment
+     * @param itemDescription the description of the item
      */
     public void notifyAgent(int agentAccountNumber,
                             int itemId,
@@ -322,56 +451,75 @@ public class AuctionHouse {
     }
 
     /**
-     * Automatically creates a new item with a random description and minimum bid.
+     * Adds a new auction item with a randomly selected description and minimum bid.
+     *
+     * <p>The item description and minimum bid are selected from predefined arrays
+     * based on the item ID modulo the array length. This ensures variety while
+     * reusing the predefined descriptions and bid amounts.
      */
     public synchronized void addNewItem() {
-        // Calculate index for random data selection based on current count
-        int tempIndex = itemManager.getAllItems().size() + 1;
-
+        int itemId = nextItemId++;
         String description = itemDescriptions[
-                Math.abs(tempIndex % itemDescriptions.length)];
+                Math.abs(itemId % itemDescriptions.length)];
         double minimumBid = itemMinimumBids[
-                Math.abs(tempIndex % itemMinimumBids.length)];
-
-        // Add to manager
-        itemManager.addItem(description, minimumBid);
+                Math.abs(itemId % itemMinimumBids.length)];
+        AuctionItem item = new AuctionItem(auctionHouseId, itemId, description, minimumBid);
+        AuctionItemManager manager = new AuctionItemManager(item, bankClient, this);
+        items.put(itemId, manager);
     }
 
     /**
-     * Adds a new item with specific details (used by the GUI).
+     * Adds a new auction item with specified description and minimum bid.
+     *
+     * @param description the item description
+     * @param minimumBid the minimum bid amount for the item
      */
     public synchronized void addNewItem(String description, double minimumBid) {
-        itemManager.addItem(description, minimumBid);
+        int itemId = nextItemId++;
+        AuctionItem item = new AuctionItem(auctionHouseId, itemId, description, minimumBid);
+        AuctionItemManager manager = new AuctionItemManager(item, bankClient, this);
+        items.put(itemId, manager);
     }
 
     /**
-     * Attempts to remove an item.
-     * Returns false if the item has active bids or cannot be found.
+     * Removes an item from the auction if it has no active bids.
+     *
+     * <p>Items with active bids cannot be removed to preserve auction integrity
+     * and prevent disputes with bidders.
+     *
+     * @param itemId the unique identifier of the item to remove
+     * @return true if the item was removed, false if it has active bids or doesn't exist
      */
     public synchronized boolean removeItem(int itemId) {
-        AuctionItem item = itemManager.getItem(itemId);
-        // Only allow removal if no one has bid on it yet
-        if (item != null && item.currentBidderAccountNumber == -1) {
-            // NOTE: The current AuctionItemManager does not implement a remove method.
-            // This would need to be extended if deletion functionality is required.
-            return false;
+        AuctionItemManager manager = items.get(itemId);
+        if (manager != null) {
+            if (manager.getItem().currentBidderAccountNumber == -1) {
+                items.remove(itemId);
+                return true;
+            }
         }
         return false;
     }
 
     /**
-     * Checks if there are any active bids on any items.
-     * Used to prevent closing the server while auctions are active.
+     * Checks if any items in the auction have active bids.
+     *
+     * <p>This is useful for determining if the auction house can safely shut down
+     * or if there are pending transactions that need to be completed.
+     *
+     * @return true if at least one item has a current bidder, false otherwise
      */
     public boolean hasActiveBids() {
-        return itemManager.getAllItems().stream()
-                .anyMatch(item -> item.currentBidderAccountNumber != -1);
+        return items.values().stream()
+                .anyMatch(manager -> manager.getItem().currentBidderAccountNumber != -1);
     }
 
     /**
-     * Returns the total number of items currently managed.
+     * Gets the current number of items in the auction.
+     *
+     * @return the count of active auction items
      */
     public int getItemCount() {
-        return itemManager.getAllItems().size();
+        return items.size();
     }
 }
