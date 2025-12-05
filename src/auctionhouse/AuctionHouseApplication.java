@@ -1,7 +1,9 @@
 package auctionhouse;
 
+import messages.BankMessages;
 import common.AuctionItem;
-import common.AuctionHouseInfo;
+import messages.AuctionMessages;
+
 
 import javafx.application.Application;
 import javafx.application.Platform;
@@ -254,7 +256,7 @@ public class AuctionHouseApplication extends Application {
                     setText(item);
                     // Color coding
                     if (item.equals("No bids yet")) {
-                        setStyle("-fx-text-fill: gray;");
+                        setStyle("-fx-text-fill: rgb(128,128,128);"); //grey color
                     } else if (item.equals("Ending...")) {
                         setStyle("-fx-text-fill: red; -fx-font-weight: bold;");
                     } else if (item.startsWith("00:")) {
@@ -508,16 +510,12 @@ public class AuctionHouseApplication extends Application {
     private void logActivity(String message) {
         String timestamp = java.time.LocalTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
-        Platform.runLater(() -> {
-            activityLog.appendText("[" + timestamp + "] " + message + "\n");
-        });
+        Platform.runLater(() -> activityLog.appendText("[" + timestamp + "] " + message + "\n"));
     }
 
     private void log(String message) {
         String timestamp = java.time.LocalTime.now().toString().substring(0, 8);
-        Platform.runLater(() -> {
-            logArea.appendText("[" + timestamp + "] " + message + "\n");
-        });
+        Platform.runLater(() -> logArea.appendText("[" + timestamp + "] " + message + "\n"));
     }
 
     public static void main(String[] args) {

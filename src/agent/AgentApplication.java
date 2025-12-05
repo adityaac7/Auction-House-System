@@ -478,9 +478,7 @@ public class AgentApplication extends Application {
 
                     @Override
                     public void onPurchasesUpdated(java.util.List<Agent.Purchase> purchases) {
-                        Platform.runLater(() -> {
-                            purchasesTable.getItems().setAll(purchases);
-                        });
+                        Platform.runLater(() -> purchasesTable.getItems().setAll(purchases));
                     }
                 });
 
