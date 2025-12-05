@@ -4,7 +4,6 @@ import messages.BankMessages;
 import common.AuctionItem;
 import messages.AuctionMessages;
 
-
 import javafx.application.Application;
 import javafx.application.Platform;
 import javafx.geometry.Insets;
@@ -18,9 +17,20 @@ import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.beans.property.SimpleStringProperty;
 
 /**
- * JavaFX GUI for Auction House with Activity Logging and Timer Display
+ * JavaFX application for managing an auction house server.
+ * <p>
+ * This GUI allows an operator to:
+ * <ul>
+ *     <li>Connect the auction house to the bank.</li>
+ *     <li>Start the auction house server on a chosen port.</li>
+ *     <li>Create and remove auction items.</li>
+ *     <li>Monitor current bids and bidders.</li>
+ *     <li>View activity and server logs.</li>
+ *     <li>See a countdown timer for each item based on its auction end time.</li>
+ * </ul>
  */
 public class AuctionHouseApplication extends Application {
+
     private AuctionHouse auctionHouse;
     private AuctionHouseServer server;
     private TextArea logArea;
@@ -38,10 +48,17 @@ public class AuctionHouseApplication extends Application {
     private TextField bankPortField;
     private TextField auctionPortField;
 
-    // ⭐ NEW: Timer update thread
+    /**
+     * Background thread used to periodically update the countdown timers
+     * for each item in the table.
+     */
     private Thread timerUpdateThread;
 
-    // ⭐ Enhanced ItemDisplay with timer
+    /**
+     * Lightweight view model used for displaying {@link AuctionItem} data
+     * in the JavaFX {@link TableView}, including a computed time-remaining
+     * string based on the item's auction end time.
+     */
     public static class ItemDisplay {
         private final int itemId;
         private final String description;
@@ -49,8 +66,13 @@ public class AuctionHouseApplication extends Application {
         private final double currentBid;
         private final int currentBidder;
         private final long auctionEndTime;
-        private SimpleStringProperty timeRemaining;
+        private final SimpleStringProperty timeRemaining;
 
+        /**
+         * Constructs a display wrapper from a domain {@link AuctionItem}.
+         *
+         * @param item the underlying auction item
+         */
         public ItemDisplay(AuctionItem item) {
             this.itemId = item.itemId;
             this.description = item.description;
@@ -61,15 +83,41 @@ public class AuctionHouseApplication extends Application {
             this.timeRemaining = new SimpleStringProperty(calculateTimeRemaining());
         }
 
-        public int getItemId() { return itemId; }
-        public String getDescription() { return description; }
-        public double getMinimumBid() { return minimumBid; }
-        public double getCurrentBid() { return currentBid; }
-        public int getCurrentBidder() { return currentBidder; }
-        public String getTimeRemaining() { return timeRemaining.get(); }
-        public SimpleStringProperty timeRemainingProperty() { return timeRemaining; }
+        public int getItemId() {
+            return itemId;
+        }
 
-        // ⭐ Calculate time remaining
+        public String getDescription() {
+            return description;
+        }
+
+        public double getMinimumBid() {
+            return minimumBid;
+        }
+
+        public double getCurrentBid() {
+            return currentBid;
+        }
+
+        public int getCurrentBidder() {
+            return currentBidder;
+        }
+
+        public String getTimeRemaining() {
+            return timeRemaining.get();
+        }
+
+        public SimpleStringProperty timeRemainingProperty() {
+            return timeRemaining;
+        }
+
+        /**
+         * Computes a human-readable representation of the remaining time
+         * until the auction end time, using the current system time.
+         *
+         * @return formatted remaining time (MM:SS), "No bids yet" if the
+         *         end time is unset, or "Ending..." if the time has elapsed
+         */
         public String calculateTimeRemaining() {
             if (auctionEndTime == 0) {
                 return "No bids yet";
@@ -86,12 +134,21 @@ public class AuctionHouseApplication extends Application {
             return String.format("%02d:%02d", seconds / 60, seconds % 60);
         }
 
-        // ⭐ Update timer display
+        /**
+         * Recalculates and updates the {@code timeRemaining} property.
+         * This method is intended to be called periodically by the timer
+         * update thread.
+         */
         public void updateTimer() {
             Platform.runLater(() -> timeRemaining.set(calculateTimeRemaining()));
         }
     }
 
+    /**
+     * Sets up the primary stage and builds the main layout.
+     *
+     * @param primaryStage the main application window
+     */
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("Auction House Management");
@@ -112,7 +169,6 @@ public class AuctionHouseApplication extends Application {
         primaryStage.setScene(scene);
 
         primaryStage.setOnCloseRequest(event -> {
-            // ⭐ Stop timer thread
             if (timerUpdateThread != null && timerUpdateThread.isAlive()) {
                 timerUpdateThread.interrupt();
             }
@@ -145,6 +201,12 @@ public class AuctionHouseApplication extends Application {
         primaryStage.show();
     }
 
+    /**
+     * Builds the top section of the UI containing connection fields,
+     * status information, and the button used to start the server.
+     *
+     * @return a {@link VBox} containing the top controls
+     */
     private VBox createTopSection() {
         VBox topSection = new VBox(10);
         topSection.setPadding(new Insets(10));
@@ -180,11 +242,17 @@ public class AuctionHouseApplication extends Application {
         return topSection;
     }
 
+    /**
+     * Builds the center section of the UI, which consists of the items table
+     * on the left and the activity log on the right.
+     *
+     * @return a {@link SplitPane} containing the main content area
+     */
     private SplitPane createCenterSection() {
         SplitPane splitPane = new SplitPane();
         splitPane.setDividerPositions(0.5);
 
-        // Left: Items table
+        // Left: Items table and controls
         VBox leftSection = new VBox(10);
         leftSection.setPadding(new Insets(10));
 
@@ -241,7 +309,6 @@ public class AuctionHouseApplication extends Application {
             }
         });
 
-        // ⭐ NEW: Timer column
         TableColumn<ItemDisplay, String> timerCol = new TableColumn<>("Time Left");
         timerCol.setCellValueFactory(cellData -> cellData.getValue().timeRemainingProperty());
         timerCol.setPrefWidth(90);
@@ -254,16 +321,13 @@ public class AuctionHouseApplication extends Application {
                     setStyle("");
                 } else {
                     setText(item);
-                    // Color coding
                     if (item.equals("No bids yet")) {
-                        setStyle("-fx-text-fill: rgb(128,128,128);"); //grey color
+                        setStyle("-fx-text-fill: rgb(128,128,128);");
                     } else if (item.equals("Ending...")) {
                         setStyle("-fx-text-fill: red; -fx-font-weight: bold;");
                     } else if (item.startsWith("00:")) {
-                        // Less than 1 minute - red
                         setStyle("-fx-text-fill: red; -fx-font-weight: bold;");
                     } else {
-                        // More than 1 minute - green
                         setStyle("-fx-text-fill: green; -fx-font-weight: bold;");
                     }
                 }
@@ -298,7 +362,7 @@ public class AuctionHouseApplication extends Application {
 
         leftSection.getChildren().addAll(itemsLabel, itemsTable, itemControls);
 
-        // Right: Activity Log
+        // Right: Activity log
         VBox rightSection = new VBox(10);
         rightSection.setPadding(new Insets(10));
 
@@ -317,6 +381,11 @@ public class AuctionHouseApplication extends Application {
         return splitPane;
     }
 
+    /**
+     * Builds the bottom section of the UI that displays the server log.
+     *
+     * @return a {@link VBox} containing the server log area
+     */
     private VBox createBottomSection() {
         VBox bottomSection = new VBox(5);
         bottomSection.setPadding(new Insets(10));
@@ -333,6 +402,11 @@ public class AuctionHouseApplication extends Application {
         return bottomSection;
     }
 
+    /**
+     * Attempts to start the auction house server using the host and port
+     * information entered in the top section. On success, the UI is updated
+     * to reflect the running state and item controls are enabled.
+     */
     private void startServer() {
         try {
             String bankHost = bankHostField.getText();
@@ -343,7 +417,6 @@ public class AuctionHouseApplication extends Application {
             server = new AuctionHouseServer(bankHost, bankPort, auctionPort, true);
             auctionHouse = server.getAuctionHouse();
 
-            // Set callback for activity logging
             auctionHouse.setCallback(new AuctionHouse.AuctionHouseCallback() {
                 @Override
                 public void onBidPlaced(int itemId, String itemDesc, int agentAccount, double bidAmount) {
@@ -386,11 +459,8 @@ public class AuctionHouseApplication extends Application {
             auctionPortField.setDisable(true);
 
             refreshItems();
-
-            // ⭐ Start timer update thread
             startTimerUpdateThread();
 
-            // Auto-refresh items
             Thread refreshThread = new Thread(() -> {
                 while (!Thread.currentThread().isInterrupted()) {
                     try {
@@ -410,19 +480,20 @@ public class AuctionHouseApplication extends Application {
         }
     }
 
-    // ⭐ NEW: Timer update thread
+    /**
+     * Starts a daemon thread that periodically updates the
+     * time-remaining value for each item in the table.
+     */
     private void startTimerUpdateThread() {
         timerUpdateThread = new Thread(() -> {
             while (!Thread.currentThread().isInterrupted()) {
                 try {
-                    Thread.sleep(1000); // Update every second
-
+                    Thread.sleep(1000);
                     Platform.runLater(() -> {
                         for (ItemDisplay item : itemsList) {
                             item.updateTimer();
                         }
                     });
-
                 } catch (InterruptedException e) {
                     break;
                 }
@@ -432,6 +503,11 @@ public class AuctionHouseApplication extends Application {
         timerUpdateThread.start();
     }
 
+    /**
+     * Adds a new item to the auction house using the values entered
+     * in the description and minimum bid fields.
+     * Validation errors are reported in the server log.
+     */
     private void addItem() {
         try {
             String description = itemDescriptionField.getText().trim();
@@ -460,6 +536,10 @@ public class AuctionHouseApplication extends Application {
         }
     }
 
+    /**
+     * Removes the currently selected item from the auction house,
+     * provided it does not have an active bid.
+     */
     private void removeItem() {
         ItemDisplay selected = itemsTable.getSelectionModel().getSelectedItem();
         if (selected == null) {
@@ -481,8 +561,15 @@ public class AuctionHouseApplication extends Application {
         }
     }
 
+    /**
+     * Refreshes the list of items from the underlying {@link AuctionHouse}
+     * and updates the {@link TableView}. If an item was previously selected,
+     * the same item is re-selected when possible.
+     */
     private void refreshItems() {
-        if (auctionHouse == null) return;
+        if (auctionHouse == null) {
+            return;
+        }
 
         ItemDisplay currentSelection = itemsTable.getSelectionModel().getSelectedItem();
         Integer selectedItemId = (currentSelection != null) ? currentSelection.getItemId() : null;
@@ -507,17 +594,32 @@ public class AuctionHouseApplication extends Application {
         }
     }
 
+    /**
+     * Appends a timestamped entry to the activity log on the right-hand side.
+     *
+     * @param message message describing an auction event
+     */
     private void logActivity(String message) {
         String timestamp = java.time.LocalTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         Platform.runLater(() -> activityLog.appendText("[" + timestamp + "] " + message + "\n"));
     }
 
+    /**
+     * Appends a timestamped entry to the server log at the bottom of the window.
+     *
+     * @param message log line to append
+     */
     private void log(String message) {
         String timestamp = java.time.LocalTime.now().toString().substring(0, 8);
         Platform.runLater(() -> logArea.appendText("[" + timestamp + "] " + message + "\n"));
     }
 
+    /**
+     * Standard {@code main} entry point. Delegates to {@link Application#launch(String...)}.
+     *
+     * @param args command-line arguments passed to JavaFX
+     */
     public static void main(String[] args) {
         launch(args);
     }
