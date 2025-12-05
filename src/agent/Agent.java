@@ -381,15 +381,24 @@ public class Agent {
                                         (AuctionMessages.BidStatusNotification) message;
                                 System.out.println("[AGENT] Notification for item "
                                         + n.itemId + ": " + n.status + " - " + n.message);
+
                                 if (uiCallback != null) {
                                     uiCallback.onBidStatusChanged(
                                             n.itemId, n.status, n.message);
                                 }
+
+                                // For the winner: handle payment and then update balance inside confirmWinner()
                                 if ("WINNER".equals(n.status)) {
                                     confirmWinner(auctionHouseId, n.itemId, n.finalPrice,
                                             n.auctionHouseAccountNumber, n.itemDescription);
+                                } else {
+                                    // For OUTBID / ITEM_SOLD / REJECTED etc:
+                                    // Bank may have unblocked or changed funds, so refresh our view.
+                                    updateBalance();
                                 }
-                            } else {
+                            }
+
+                            else {
                                 BlockingQueue<Message> queue =
                                         responseQueues.get(auctionHouseId);
                                 if (queue != null) {
