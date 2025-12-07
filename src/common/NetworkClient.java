@@ -14,6 +14,10 @@ public class NetworkClient {
     private Socket socket;
     private ObjectOutputStream outputStream;
     private ObjectInputStream inputStream;
+    
+    // Locks for thread-safe read/write operations
+    private final Object readLock = new Object();
+    private final Object writeLock = new Object();
 
     /**
      * Creates a new {@code NetworkClient} connected to the given host and port.
@@ -34,7 +38,9 @@ public class NetworkClient {
         // Connect with timeout
         socket.connect(new InetSocketAddress(host, port), 10000);  // 10 second connection timeout
 
-        // CLIENT SIDE: Create INPUT stream FIRST, then OUTPUT stream
+        // Important: Create input stream first, then output stream. ObjectOutputStream
+        // writes a header when created, and if the server is also waiting for us to
+        // create our output stream first, we'll deadlock. Creating input first avoids this.
         this.inputStream = new ObjectInputStream(socket.getInputStream());
         this.outputStream = new ObjectOutputStream(socket.getOutputStream());
         this.outputStream.flush();
@@ -68,9 +74,13 @@ public class NetworkClient {
      * @throws IOException if an I/O error occurs during transmission
      */
     public void sendMessage(Message message) throws IOException {
-        outputStream.writeObject(message);
-        outputStream.flush();
-        outputStream.reset(); // Clear object cache to prevent memory leaks
+        synchronized (writeLock) {
+            outputStream.writeObject(message);
+            outputStream.flush();
+            // Reset clears the object cache - without this, ObjectOutputStream keeps
+            // references to all objects we've sent, causing memory leaks over time
+            outputStream.reset();
+        }
     }
 
     /**
@@ -82,11 +92,26 @@ public class NetworkClient {
      * @throws ClassNotFoundException if the message class cannot be found
      */
     public Message receiveMessage() throws IOException, ClassNotFoundException {
-        try {
-            return (Message) inputStream.readObject();
-        } catch (SocketTimeoutException e) {
-            // Re-throw timeout as regular IOException with clear message
-            throw new IOException("Read timeout - no response from server", e);
+        synchronized (readLock) {
+            try {
+                return (Message) inputStream.readObject();
+            } catch (SocketTimeoutException e) {
+                // Re-throw timeout as regular IOException with clear message
+                throw new IOException("Read timeout - no response from server", e);
+            } catch (java.io.StreamCorruptedException e) {
+                // Stream corruption - connection is unusable
+                throw new IOException("Stream corrupted - connection unusable: " + e.getMessage(), e);
+            } catch (java.io.EOFException e) {
+                // End of stream - connection closed
+                throw new IOException("Connection closed (EOF)", e);
+            } catch (IOException e) {
+                // Check for stream corruption in the error message
+                String msg = e.getMessage();
+                if (msg != null && (msg.contains("invalid type code") || msg.contains("invalid handle"))) {
+                    throw new IOException("Stream corrupted: " + msg, e);
+                }
+                throw e;
+            }
         }
     }
 

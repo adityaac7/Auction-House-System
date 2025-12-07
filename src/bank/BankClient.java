@@ -2,7 +2,6 @@ package bank;
 
 import common.NetworkClient;
 import messages.BankMessages;
-import common.Message;
 import common.AuctionHouseInfo;
 
 import java.io.IOException;

@@ -469,6 +469,22 @@ public class AgentApplication extends Application {
                                 log("[✓ YOU WON] Item " + itemId + ": " + message);
                                 color = "green";
                                 setStatusMessage("YOU WON: " + message, color);
+                                
+                                // Remove won item from the table immediately
+                                itemsTable.getItems().removeIf(item -> item.itemId == itemId);
+                                
+                                // Refresh purchases table in case purchase was just added
+                                // (confirmWinner runs in background thread and may have just completed)
+                                Platform.runLater(() -> {
+                                    if (agent != null) {
+                                        List<Agent.Purchase> purchases = agent.getPurchases();
+                                        purchasesTable.getItems().setAll(purchases);
+                                        log("Purchases updated: " + purchases.size() + " items");
+                                    }
+                                });
+                                
+                                // Don't auto-refresh for WINNER - item is being processed
+                                return; // Exit early, don't call loadItems()
 
                             } else if ("OUTBID".equals(status)) {
                                 // This agent was outbid
@@ -482,11 +498,26 @@ public class AgentApplication extends Application {
                                     log("[✓ YOU WON] " + message);
                                     color = "green";
                                     setStatusMessage("Item purchased!", color);
+                                    
+                                    // Remove won item from the table immediately
+                                    itemsTable.getItems().removeIf(item -> item.itemId == itemId);
+                                    
+                                    // Refresh purchases table - purchase should be confirmed by now
+                                    if (agent != null) {
+                                        List<Agent.Purchase> purchases = agent.getPurchases();
+                                        purchasesTable.getItems().setAll(purchases);
+                                        log("Purchases updated: " + purchases.size() + " items");
+                                    }
+                                    
+                                    // Don't auto-refresh for ITEM_SOLD when we won - item is being processed
+                                    return; // Exit early, don't call loadItems()
                                 } else {
-                                    // Another agent won - just update UI silently
+                                    // Another agent won - remove item from our view
+                                    itemsTable.getItems().removeIf(item -> item.itemId == itemId);
                                     // Don't spam the log for items other agents bought
                                     color = "orange";
                                     setStatusMessage("Item sold to another agent", color);
+                                    // Refresh to get updated list
                                 }
 
                             } else if ("REJECTED".equals(status)) {
@@ -558,21 +589,32 @@ public class AgentApplication extends Application {
 
         new Thread(() -> {
             try {
-                // FORCE CLEAN RECONNECTION
-                if (agent.isConnectedToAuctionHouse(selectedHouse.auctionHouseId)) {
-                    Platform.runLater(() -> log("Closing existing connection..."));
-                    // Use the closeAuctionHouseConnection method we added
-                    agent.closeAuctionHouseConnection(selectedHouse.auctionHouseId);
-                    Thread.sleep(500); // Give it time to close
+                // Check if we already have a valid connection
+                boolean needsConnection = !agent.isConnectedToAuctionHouse(selectedHouse.auctionHouseId);
+                
+                if (needsConnection) {
+                    Platform.runLater(() -> log("Connecting to Auction House "
+                            + selectedHouse.auctionHouseId + "..."));
+                    
+                    agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
+                    agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+                    
+                    Thread.sleep(300); // Let connection stabilize
+                } else {
+                    // Connection exists, just ensure listener is running
+                    try {
+                        agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+                    } catch (Exception e) {
+                        // If listener start fails, reconnect
+                        Platform.runLater(() -> log("Reconnecting to Auction House "
+                                + selectedHouse.auctionHouseId + "..."));
+                        agent.closeAuctionHouseConnection(selectedHouse.auctionHouseId);
+                        Thread.sleep(200);
+                        agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
+                        agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+                        Thread.sleep(300);
+                    }
                 }
-
-                Platform.runLater(() -> log("Connecting to Auction House "
-                        + selectedHouse.auctionHouseId + "..."));
-
-                agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
-                agent.startListeningForNotifications(selectedHouse.auctionHouseId);
-
-                Thread.sleep(300); // Let connection stabilize
 
                 AuctionItem[] items = agent.getItemsFromAuctionHouse(selectedHouse.auctionHouseId);
 

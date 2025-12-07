@@ -7,7 +7,6 @@ import common.NetworkClient;
 import messages.AuctionMessages;
 import messages.BankMessages;
 
-import java.io.EOFException;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
@@ -347,7 +346,7 @@ public class Agent {
      * @param auctionHouseId the unique ID of the auction house
      */
     public void startListeningForNotifications(int auctionHouseId) {
-        // Stop and wait for existing listener to terminate
+        // Check if listener is already running
         Thread existingThread = listenerThreads.get(auctionHouseId);
         if (existingThread != null && existingThread.isAlive()) {
             System.out.println("[AGENT] Listener already running for auction house "
@@ -356,12 +355,17 @@ public class Agent {
         }
 
         // Remove any dead thread from map
-        listenerThreads.remove(auctionHouseId);
+        if (existingThread != null) {
+            System.out.println("[AGENT] Previous listener thread for auction house "
+                    + auctionHouseId + " is dead, starting new one");
+            listenerThreads.remove(auctionHouseId);
+        }
 
         Thread listenerThread = new Thread(() -> {
             int retries = 0;
             while (retries < 3 && !Thread.currentThread().isInterrupted()) {
                 try {
+                    // Get connection and store reference to avoid race condition
                     NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
                     if (connection == null) {
                         System.out.println("[AGENT] No connection to auction house "
@@ -372,10 +376,15 @@ public class Agent {
                     System.out.println("[AGENT] Started listening for notifications from auction house "
                             + auctionHouseId);
 
-                    while (connection.isConnected()
-                            && !Thread.currentThread().isInterrupted()) {
+                    // Snapshot the connection reference to avoid issues if another thread removes
+                    // it from the map while we're using it. We check it's still the same one
+                    // in the loop condition.
+                    NetworkClient localConnection = connection;
+                    while (localConnection.isConnected()
+                            && !Thread.currentThread().isInterrupted()
+                            && auctionHouseConnections.get(auctionHouseId) == localConnection) {
                         try {
-                            Message message = connection.receiveMessage();
+                            Message message = localConnection.receiveMessage();
 
                             if (message instanceof AuctionMessages.BidStatusNotification) {
                                 AuctionMessages.BidStatusNotification n =
@@ -389,18 +398,40 @@ public class Agent {
                                             n.itemId, n.status, n.message);
                                 }
 
-                                // For the winner: handle payment and then update balance inside confirmWinner()
+                                // Winner notifications need special handling - we have to transfer money
+                                // and confirm with the auction house. This can take a while, so do it
+                                // in a background thread to keep the listener responsive.
                                 if ("WINNER".equals(n.status)) {
-                                    confirmWinner(auctionHouseId, n.itemId, n.finalPrice,
-                                            n.auctionHouseAccountNumber, n.itemDescription);
+                                    // Capture these in final variables for the lambda
+                                    final int ahId = auctionHouseId;
+                                    final int itId = n.itemId;
+                                    final double price = n.finalPrice;
+                                    final int ahAccount = n.auctionHouseAccountNumber;
+                                    final String desc = n.itemDescription;
+                                    
+                                    new Thread(() -> {
+                                        confirmWinner(ahId, itId, price, ahAccount, desc);
+                                    }).start();
                                 }
-                                // Note: For OUTBID / ITEM_SOLD / REJECTED etc, we don't call updateBalance()
-                                // here to avoid blocking the listener thread. Balance will be updated when
-                                // the user places a new bid or when confirmWinner() completes.
+                                // For other notifications (OUTBID, ITEM_SOLD, etc), we don't update balance
+                                // here to avoid blocking. The balance will get refreshed when the user
+                                // places another bid or when confirmWinner finishes.
                             } else {
+                                // This isn't a notification - it's a response to something we requested
+                                // (like GetItemsResponse or PlaceBidResponse). Put it in the queue so
+                                // the waiting thread can pick it up.
                                 BlockingQueue<Message> queue = responseQueues.get(auctionHouseId);
                                 if (queue != null) {
-                                    queue.offer(message, 5, TimeUnit.SECONDS);
+                                    boolean offered = queue.offer(message, 5, TimeUnit.SECONDS);
+                                    if (!offered) {
+                                        // Queue is full or we got interrupted - this shouldn't happen normally
+                                        System.out.println("[AGENT] WARNING: Failed to queue response message type: "
+                                                + message.getMessageType() + " - queue may be full or interrupted");
+                                    }
+                                } else {
+                                    // No queue means no one is waiting for this response - drop it
+                                    System.out.println("[AGENT] WARNING: No response queue for auction house "
+                                            + auctionHouseId + ", dropping message: " + message.getMessageType());
                                 }
                             }
                         } catch (java.net.SocketTimeoutException e) {
@@ -408,13 +439,55 @@ public class Agent {
                             // Don't log this, it's normal
                             continue;
                         } catch (IOException e) {
-                            System.out.println("[AGENT] Connection lost to auction house "
-                                    + auctionHouseId + ": " + e.getMessage());
-                            break;
+                            String errorMsg = e.getMessage();
+                            System.out.println("[AGENT] I/O error reading from auction house "
+                                    + auctionHouseId + ": " + errorMsg);
+                            
+                            // Check for stream corruption errors - these indicate the connection is unusable
+                            if (errorMsg != null && (errorMsg.contains("invalid type code") 
+                                    || errorMsg.contains("invalid handle") 
+                                    || errorMsg.contains("StreamCorruptedException")
+                                    || errorMsg.contains("Stream corrupted")
+                                    || errorMsg.contains("Connection closed (EOF)"))) {
+                                System.out.println("[AGENT] Stream corrupted - closing connection to auction house " + auctionHouseId);
+                                // Close the corrupted connection
+                                // Use the local connection reference to avoid race condition
+                                NetworkClient conn = auctionHouseConnections.get(auctionHouseId);
+                                if (conn != null && conn == localConnection) {
+                                    try {
+                                        conn.close();
+                                    } catch (IOException closeEx) {
+                                        // Ignore close errors
+                                    }
+                                    auctionHouseConnections.remove(auctionHouseId);
+                                }
+                                break; // Fatal error - exit listener
+                            }
+                            
+                            // For other IOExceptions (like "Socket closed", "Connection reset"), 
+                            // check if connection is still valid
+                            // Re-check connection from map to ensure it hasn't been replaced
+                            NetworkClient currentConnection = auctionHouseConnections.get(auctionHouseId);
+                            if (currentConnection != localConnection || !localConnection.isConnected()) {
+                                System.out.println("[AGENT] Connection to auction house " + auctionHouseId + " is closed or replaced");
+                                break; // Connection closed or replaced - exit listener
+                            }
+                            
+                            // For transient errors, log and continue listening
+                            System.out.println("[AGENT] Transient I/O error, continuing to listen...");
+                            try {
+                                Thread.sleep(100); // Brief pause before retrying
+                            } catch (InterruptedException ie) {
+                                Thread.currentThread().interrupt();
+                                break;
+                            }
+                            continue; // Continue listening instead of breaking
                         } catch (ClassNotFoundException e) {
                             System.out.println("[AGENT] Invalid message from auction house "
                                     + auctionHouseId + ": " + e.getMessage());
-                            break;
+                            // Don't break on ClassNotFoundException - might be a one-off issue
+                            // Continue listening for other messages
+                            continue;
                         }
                     }
 
@@ -442,6 +515,13 @@ public class Agent {
         listenerThread.setName("AH-" + auctionHouseId + "-Listener");
         listenerThreads.put(auctionHouseId, listenerThread);
         listenerThread.start();
+
+        // Give the listener thread a moment to start reading messages
+        try {
+            Thread.sleep(100);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
     }
 
 
@@ -476,7 +556,8 @@ public class Agent {
         System.out.println("[AGENT] ========================================");
 
         try {
-            // 1) Ask BANK to transfer blocked funds
+            // Step 1: Transfer the money first. This is the critical part - once we transfer,
+            // we're committed to the purchase even if something goes wrong later.
             System.out.println("[AGENT] Step 1: Transferring $" + finalPrice + " to auction house...");
             BankMessages.TransferFundsRequest transferRequest =
                     new BankMessages.TransferFundsRequest(
@@ -484,6 +565,7 @@ public class Agent {
                             auctionHouseAccountNumber,
                             finalPrice);
 
+            // Synchronize on bankClient to prevent concurrent bank operations
             synchronized (bankClient) {
                 bankClient.sendMessage(transferRequest);
                 BankMessages.TransferFundsResponse transferResponse =
@@ -498,22 +580,60 @@ public class Agent {
                 System.out.println("[AGENT] ✓ Transfer successful!");
             }
 
-            // 2) Notify auction house that transfer is done
+            // Step 2: Now notify the auction house that payment is complete.
+            // If this fails, we still record the purchase since money was already transferred.
             NetworkClient connection = auctionHouseConnections.get(auctionHouseId);
             if (connection == null) {
                 System.out.println("[AGENT] ERROR: No connection to confirm winner");
+                // Funds were already transferred, so record purchase anyway
+                System.out.println("[AGENT] WARNING: Funds transferred but no connection to confirm. "
+                        + "Recording purchase to maintain history.");
+                Purchase purchase = new Purchase(
+                        auctionHouseId, itemId, itemDescription, finalPrice);
+                purchases.add(purchase);
+                if (uiCallback != null) {
+                    uiCallback.onPurchasesUpdated(getPurchases());
+                }
+                updateBalance();
                 return;
             }
 
             if (!connection.isConnected()) {
                 System.out.println("[AGENT] ERROR: Connection closed, cannot confirm winner");
+                // Funds were already transferred, so record purchase anyway
+                System.out.println("[AGENT] WARNING: Funds transferred but connection closed. "
+                        + "Recording purchase to maintain history.");
+                Purchase purchase = new Purchase(
+                        auctionHouseId, itemId, itemDescription, finalPrice);
+                purchases.add(purchase);
+                if (uiCallback != null) {
+                    uiCallback.onPurchasesUpdated(getPurchases());
+                }
+                updateBalance();
                 return;
             }
 
             BlockingQueue<Message> queue = responseQueues.get(auctionHouseId);
             if (queue == null) {
                 System.out.println("[AGENT] ERROR: No response queue for auction house " + auctionHouseId);
-                return;
+                // Create queue if missing
+                queue = responseQueues.computeIfAbsent(auctionHouseId, id -> new LinkedBlockingQueue<>());
+            }
+
+            // Make sure the listener thread is alive - we need it to receive the confirmation response.
+            // If it died (maybe connection dropped), restart it.
+            Thread listener = listenerThreads.get(auctionHouseId);
+            if (listener == null || !listener.isAlive()) {
+                System.out.println("[AGENT] Listener thread not running for auction house " + auctionHouseId
+                        + ", restarting...");
+                startListeningForNotifications(auctionHouseId);
+                // Give it a moment to start up and begin listening
+                try {
+                    Thread.sleep(200);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    // Continue anyway - worst case we timeout waiting for response
+                }
             }
 
             System.out.println("[AGENT] Step 2: Confirming winner with auction house...");
@@ -530,17 +650,47 @@ public class Agent {
 
                     if (msg == null) {
                         System.out.println("[AGENT] ERROR: Timeout waiting for confirmWinner response");
+                        // Funds were already transferred, so record purchase anyway
+                        System.out.println("[AGENT] WARNING: Funds transferred but confirmation timed out. "
+                                + "Recording purchase to maintain history.");
+                        Purchase purchase = new Purchase(
+                                auctionHouseId, itemId, itemDescription, finalPrice);
+                        purchases.add(purchase);
+                        if (uiCallback != null) {
+                            uiCallback.onPurchasesUpdated(getPurchases());
+                        }
+                        updateBalance();
                         return;
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     System.out.println("[AGENT] ERROR: Interrupted while waiting for confirmWinner response");
+                    // Funds were already transferred, so record purchase anyway
+                    System.out.println("[AGENT] WARNING: Funds transferred but confirmation interrupted. "
+                            + "Recording purchase to maintain history.");
+                    Purchase purchase = new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice);
+                    purchases.add(purchase);
+                    if (uiCallback != null) {
+                        uiCallback.onPurchasesUpdated(getPurchases());
+                    }
+                    updateBalance();
                     return;
                 }
 
                 if (!(msg instanceof AuctionMessages.ConfirmWinnerResponse)) {
                     System.out.println("[AGENT] ERROR: Unexpected confirmWinner response type: "
                             + msg.getClass().getSimpleName());
+                    // Funds were already transferred, so record purchase anyway
+                    System.out.println("[AGENT] WARNING: Funds transferred but got unexpected response. "
+                            + "Recording purchase to maintain history.");
+                    Purchase purchase = new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice);
+                    purchases.add(purchase);
+                    if (uiCallback != null) {
+                        uiCallback.onPurchasesUpdated(getPurchases());
+                    }
+                    updateBalance();
                     return;
                 }
 
@@ -552,11 +702,19 @@ public class Agent {
                             + itemId + " (" + itemDescription + ")");
 
                     // Record purchase
-                    purchases.add(new Purchase(
-                            auctionHouseId, itemId, itemDescription, finalPrice));
+                    Purchase purchase = new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice);
+                    purchases.add(purchase);
+                    System.out.println("[AGENT] Purchase recorded: " + purchase.description 
+                            + " for $" + purchase.price);
 
+                    // Notify UI of purchase update
                     if (uiCallback != null) {
-                        uiCallback.onPurchasesUpdated(getPurchases());
+                        List<Purchase> purchaseList = getPurchases();
+                        System.out.println("[AGENT] Notifying UI of " + purchaseList.size() + " purchases");
+                        uiCallback.onPurchasesUpdated(purchaseList);
+                    } else {
+                        System.out.println("[AGENT] WARNING: No UI callback registered");
                     }
 
                     // Update balance
@@ -566,17 +724,58 @@ public class Agent {
                 } else {
                     System.out.println("[AGENT] ERROR: Auction house refused to confirm winner: "
                             + response.message);
+                    // Even though confirmation failed, funds were already transferred
+                    // Record the purchase anyway to maintain accurate purchase history
+                    System.out.println("[AGENT] WARNING: Funds were transferred but confirmation failed. "
+                            + "Recording purchase anyway.");
+                    Purchase purchase = new Purchase(
+                            auctionHouseId, itemId, itemDescription, finalPrice);
+                    purchases.add(purchase);
+                    if (uiCallback != null) {
+                        uiCallback.onPurchasesUpdated(getPurchases());
+                    }
+                    updateBalance();
                 }
             }
         } catch (IOException e) {
             System.err.println("[AGENT] ERROR confirming winner (IOException): " + e.getMessage());
             e.printStackTrace();
+            // Funds were already transferred, so record purchase anyway to maintain history
+            System.out.println("[AGENT] WARNING: Funds transferred but IOException during confirmation. "
+                    + "Recording purchase to maintain history.");
+            Purchase purchase = new Purchase(
+                    auctionHouseId, itemId, itemDescription, finalPrice);
+            purchases.add(purchase);
+            if (uiCallback != null) {
+                uiCallback.onPurchasesUpdated(getPurchases());
+            }
+            updateBalance();
         } catch (ClassNotFoundException e) {
             System.err.println("[AGENT] ERROR confirming winner (ClassNotFoundException): " + e.getMessage());
             e.printStackTrace();
+            // Funds were already transferred, so record purchase anyway to maintain history
+            System.out.println("[AGENT] WARNING: Funds transferred but ClassNotFoundException during confirmation. "
+                    + "Recording purchase to maintain history.");
+            Purchase purchase = new Purchase(
+                    auctionHouseId, itemId, itemDescription, finalPrice);
+            purchases.add(purchase);
+            if (uiCallback != null) {
+                uiCallback.onPurchasesUpdated(getPurchases());
+            }
+            updateBalance();
         } catch (Exception e) {
             System.err.println("[AGENT] ERROR confirming winner (Unexpected): " + e.getMessage());
             e.printStackTrace();
+            // Funds were already transferred, so record purchase anyway to maintain history
+            System.out.println("[AGENT] WARNING: Funds transferred but unexpected error during confirmation. "
+                    + "Recording purchase to maintain history.");
+            Purchase purchase = new Purchase(
+                    auctionHouseId, itemId, itemDescription, finalPrice);
+            purchases.add(purchase);
+            if (uiCallback != null) {
+                uiCallback.onPurchasesUpdated(getPurchases());
+            }
+            updateBalance();
         }
     }
 
@@ -616,19 +815,59 @@ public class Agent {
                 responseQueues.computeIfAbsent(auctionHouseId,
                         id -> new LinkedBlockingQueue<>());
 
+        // Ensure listener thread is running - restart if dead
+        Thread listener = listenerThreads.get(auctionHouseId);
+        if (listener == null || !listener.isAlive()) {
+            System.out.println("[AGENT] Listener thread not running for auction house " + auctionHouseId
+                    + ", restarting...");
+            startListeningForNotifications(auctionHouseId);
+            // Wait a moment for listener to start
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrupted while starting listener", e);
+            }
+            // Verify it started
+            listener = listenerThreads.get(auctionHouseId);
+            if (listener == null || !listener.isAlive()) {
+                throw new IOException("Failed to start listener thread for auction house " + auctionHouseId);
+            }
+        }
+
+        // Check connection is still valid
+        if (!connection.isConnected()) {
+            // Connection was closed - remove it and throw error
+            auctionHouseConnections.remove(auctionHouseId);
+            throw new IOException("Connection to auction house " + auctionHouseId + " is closed");
+        }
+        
+        // Double-check the connection is still in the map (might have been removed due to corruption)
+        if (auctionHouseConnections.get(auctionHouseId) != connection) {
+            throw new IOException("Connection to auction house " + auctionHouseId 
+                    + " was removed (possibly due to stream corruption). Please reconnect.");
+        }
+
         synchronized (connection) {
             AuctionMessages.GetItemsRequest request =
                     new AuctionMessages.GetItemsRequest();
+            System.out.println("[AGENT] Sending GetItemsRequest to auction house " + auctionHouseId);
             connection.sendMessage(request);
 
             Message msg;
             try {
                 // Use poll with timeout instead of take
+                System.out.println("[AGENT] Waiting for GetItemsResponse in queue...");
                 msg = queue.poll(10, TimeUnit.SECONDS);
 
                 if (msg == null) {
+                    System.out.println("[AGENT] ERROR: Timeout waiting for GetItemsResponse. "
+                            + "Listener thread alive: " + (listener != null && listener.isAlive())
+                            + ", Connection connected: " + connection.isConnected()
+                            + ", Queue size: " + queue.size());
                     throw new IOException("Timeout waiting for items response");
                 }
+                System.out.println("[AGENT] Received response: " + msg.getClass().getSimpleName());
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException("Interrupted while waiting for items", e);
@@ -854,6 +1093,19 @@ public class Agent {
         }
     }
     public void closeAuctionHouseConnection(int auctionHouseId) {
+        // Stop the listener thread first
+        Thread listener = listenerThreads.remove(auctionHouseId);
+        if (listener != null && listener.isAlive()) {
+            listener.interrupt();
+            // Wait for the listener thread to stop (with timeout)
+            try {
+                listener.join(2000); // Wait up to 2 seconds
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        // Close the connection
         NetworkClient connection = auctionHouseConnections.remove(auctionHouseId);
         if (connection != null) {
             try {
@@ -861,12 +1113,6 @@ public class Agent {
             } catch (IOException e) {
                 // Ignore close errors
             }
-        }
-
-        // Stop the listener thread
-        Thread listener = listenerThreads.remove(auctionHouseId);
-        if (listener != null && listener.isAlive()) {
-            listener.interrupt();
         }
 
         // Clear response queue

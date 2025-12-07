@@ -442,6 +442,8 @@ public class AuctionHouseApplication extends Application {
                 public void onItemSold(int itemId, String itemDesc, int winner, double finalPrice) {
                     logActivity(String.format("🏆 SOLD: Item %d (%s) sold to Agent %d for $%.2f",
                             itemId, itemDesc, winner, finalPrice));
+                    // Refresh the items table to remove the sold item
+                    Platform.runLater(() -> refreshItems());
                 }
             });
 

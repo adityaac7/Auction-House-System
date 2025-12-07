@@ -23,8 +23,8 @@ public class BankAccount {
      * Blocks funds for a bid. Returns true if sufficient funds are available.
      */
     public synchronized boolean blockFunds(double amount) {
-        if (amount <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            throw new IllegalArgumentException("Amount must be a positive finite number");
         }
 
         if (getAvailableFunds() >= amount) {
@@ -38,10 +38,11 @@ public class BankAccount {
      * Unblocks funds (e.g., when an agent is outbid).
      */
     public synchronized void unblockFunds(double amount) {
-        if (amount <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            throw new IllegalArgumentException("Amount must be a positive finite number");
         }
-        // Ensure we don't unblock more than what is blocked
+        // Use Math.max to prevent negative blocked funds if someone tries to unblock
+        // more than what's actually blocked (shouldn't happen, but be safe)
         blockedFunds = Math.max(0, blockedFunds - amount);
     }
 
@@ -50,11 +51,12 @@ public class BankAccount {
      * Removes the amount from both blocked funds and total balance.
      */
     public synchronized boolean transferFunds(double amount) {
-        if (amount <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            throw new IllegalArgumentException("Amount must be a positive finite number");
         }
 
-        // We can only transfer funds that were previously blocked
+        // Transfer moves money from blocked to gone (removed from account entirely).
+        // This is used when an auction is won - the blocked funds go to the auction house.
         if (blockedFunds >= amount) {
             blockedFunds -= amount;
             totalBalance -= amount;
@@ -64,8 +66,8 @@ public class BankAccount {
     }
 
     public synchronized void deposit(double amount) {
-        if (amount <= 0) {
-            throw new IllegalArgumentException("Amount must be positive");
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            throw new IllegalArgumentException("Amount must be a positive finite number");
         }
         totalBalance += amount;
     }

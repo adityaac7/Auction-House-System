@@ -122,7 +122,15 @@ public class AuctionItemManager {
 
         try {
             // STEP 1: Handle Self-Rebid
+            // If the agent is already the high bidder and wants to bid again, we need to
+            // unblock their old bid amount first, then block the new amount. If the new
+            // block fails, we have to restore the old block - otherwise their funds would
+            // be left unblocked incorrectly.
+            double unblockedAmount = 0; // How much we unblocked (if any)
+            boolean wasSelfRebid = false;
+            
             if (heldFunds.containsKey(agentAccountNumber)) {
+                wasSelfRebid = true;
                 double oldAmount = heldFunds.get(agentAccountNumber);
                 System.out.println("[ITEM " + item.itemId + "] Agent " + agentAccountNumber
                         + " rebidding - unblocking old $" + oldAmount);
@@ -137,7 +145,17 @@ public class AuctionItemManager {
 
                     if (unblockResp.success) {
                         heldFunds.remove(agentAccountNumber);
+                        unblockedAmount = oldAmount; // Track amount we unblocked
+                    } else {
+                        // Unblock failed - can't proceed with rebid
+                        System.err.println("[ITEM " + item.itemId + "] ERROR: Failed to unblock self-rebid funds: "
+                                + unblockResp.message);
+                        return "REJECTED: Failed to unblock previous bid";
                     }
+                } else {
+                    // Bank communication error during unblock
+                    System.err.println("[ITEM " + item.itemId + "] ERROR: Bank communication failed during unblock");
+                    return "REJECTED: Bank communication error";
                 }
             }
 
@@ -153,15 +171,69 @@ public class AuctionItemManager {
                 if (!blockResponse.success) {
                     System.out.println("[ITEM " + item.itemId + "] Agent " + agentAccountNumber
                             + " - Insufficient funds for $" + bidAmount);
+                    
+                    // IMPORTANT: If we unblocked their old bid but the new block failed,
+                    // we need to re-block the old amount. Otherwise their funds are stuck
+                    // in an unblocked state even though they should still have a bid active.
+                    if (wasSelfRebid && unblockedAmount > 0) {
+                        System.out.println("[ITEM " + item.itemId + "] Restoring previous bid block of $"
+                                + unblockedAmount + " after failed rebid");
+                        try {
+                            BankMessages.BlockFundsRequest restoreBlock =
+                                    new BankMessages.BlockFundsRequest(agentAccountNumber, unblockedAmount);
+                            Message restoreResponse = auctionHouse.sendToBankAndWait(restoreBlock);
+                            
+                            if (restoreResponse instanceof BankMessages.BlockFundsResponse) {
+                                BankMessages.BlockFundsResponse restoreBlockResp =
+                                        (BankMessages.BlockFundsResponse) restoreResponse;
+                                if (restoreBlockResp.success) {
+                                    heldFunds.put(agentAccountNumber, unblockedAmount);
+                                    System.out.println("[ITEM " + item.itemId + "] ✓ Previous bid restored");
+                                } else {
+                                    System.err.println("[ITEM " + item.itemId + "] CRITICAL: Failed to restore previous bid! "
+                                            + "Agent " + agentAccountNumber + " has $" + unblockedAmount
+                                            + " unblocked but not re-blocked. State inconsistent!");
+                                }
+                            }
+                        } catch (Exception e) {
+                            System.err.println("[ITEM " + item.itemId + "] CRITICAL ERROR restoring bid: "
+                                    + e.getMessage());
+                        }
+                    }
                     return "REJECTED: Insufficient funds";
                 }
             } else {
+                // Bank communication error - if we unblocked self-rebid, restore it
+                System.err.println("[ITEM " + item.itemId + "] ERROR: Bank communication failed after unblocking self-rebid");
+                
+                if (wasSelfRebid && unblockedAmount > 0) {
+                    System.out.println("[ITEM " + item.itemId + "] Attempting to restore previous bid block of $"
+                            + unblockedAmount);
+                    try {
+                        BankMessages.BlockFundsRequest restoreBlock =
+                                new BankMessages.BlockFundsRequest(agentAccountNumber, unblockedAmount);
+                        Message restoreResponse = auctionHouse.sendToBankAndWait(restoreBlock);
+                        
+                        if (restoreResponse instanceof BankMessages.BlockFundsResponse) {
+                            BankMessages.BlockFundsResponse restoreBlockResp =
+                                    (BankMessages.BlockFundsResponse) restoreResponse;
+                            if (restoreBlockResp.success) {
+                                heldFunds.put(agentAccountNumber, unblockedAmount);
+                                System.out.println("[ITEM " + item.itemId + "] ✓ Previous bid restored");
+                            } else {
+                                System.err.println("[ITEM " + item.itemId + "] CRITICAL: Failed to restore previous bid!");
+                            }
+                        }
+                    } catch (Exception e) {
+                        System.err.println("[ITEM " + item.itemId + "] CRITICAL ERROR restoring bid: "
+                                + e.getMessage());
+                    }
+                }
                 return "REJECTED: Bank communication error";
             }
 
             // STEP 3: Save previous bidder BEFORE updating
             int previousBidder = item.currentBidderAccountNumber;
-            double previousBid = item.currentBid;
 
             // STEP 4: Update item
             item.currentBid = bidAmount;
@@ -322,10 +394,24 @@ public class AuctionItemManager {
      *
      * <p>Thread Safety: This method is synchronized because it is called from the
      * timer executor thread and accesses shared item state.
+     * 
+     * <p>Race Condition Protection: Checks if timer was reset (auctionEndTime changed)
+     * to prevent resolving an auction that just received a new bid.
      */
     private synchronized void resolveAuction() {
         System.out.println("[ITEM " + item.itemId + "] ========================================");
         System.out.println("[ITEM " + item.itemId + "] Timer expired - Resolving auction...");
+
+        // Race condition check: If a bid came in right as the timer was expiring,
+        // the auctionEndTime would have been updated to a future time. Check if that
+        // happened before we resolve the auction.
+        long currentTime = System.currentTimeMillis();
+        if (item.auctionEndTime > currentTime) {
+            // Timer got reset by a new bid - don't resolve yet
+            System.out.println("[ITEM " + item.itemId + "] Timer was reset - auction still active");
+            System.out.println("[ITEM " + item.itemId + "] ========================================");
+            return;
+        }
 
         if (item.currentBidderAccountNumber == -1) {
             System.out.println("[ITEM " + item.itemId + "] No bids placed - item remains listed");

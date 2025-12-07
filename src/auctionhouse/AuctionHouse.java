@@ -260,14 +260,24 @@ public class AuctionHouse {
     public AuctionMessages.PlaceBidResponse placeBid(int itemId,
                                                      int agentAccountNumber,
                                                      double bidAmount) {
+        // Validate bid amount to prevent invalid values
+        if (Double.isNaN(bidAmount) || Double.isInfinite(bidAmount) || bidAmount <= 0) {
+            if (callback != null) {
+                callback.onBidRejected(itemId, "Unknown", agentAccountNumber,
+                        bidAmount, "Invalid bid amount");
+            }
+            return new AuctionMessages.PlaceBidResponse(false, "REJECTED",
+                    "Invalid bid amount", bidAmount);
+        }
+        
         AuctionItemManager manager = items.get(itemId);
         if (manager == null) {
             if (callback != null) {
                 callback.onBidRejected(itemId, "Unknown", agentAccountNumber,
-                        bidAmount, "Item not found");
+                        bidAmount, "Item not found or no longer available");
             }
             return new AuctionMessages.PlaceBidResponse(
-                    false, "REJECTED", "Item not found", bidAmount);
+                    false, "REJECTED", "Item not found or no longer available", bidAmount);
         }
 
         String itemDesc = manager.getItem().description;
@@ -302,7 +312,7 @@ public class AuctionHouse {
      * @param agentAccountNumber the winning agent's bank account number
      * @return a response indicating success or failure with an appropriate message
      */
-    public AuctionMessages.ConfirmWinnerResponse confirmWinner(int itemId,
+    public synchronized AuctionMessages.ConfirmWinnerResponse confirmWinner(int itemId,
                                                                int agentAccountNumber) {
         System.out.println("[AUCTION HOUSE] ========================================");
         System.out.println("[AUCTION HOUSE] Processing confirmWinner for Item " + itemId);
@@ -310,8 +320,8 @@ public class AuctionHouse {
 
         AuctionItemManager manager = items.get(itemId);
         if (manager == null) {
-            System.out.println("[AUCTION HOUSE] ERROR: Item " + itemId + " not found");
-            return new AuctionMessages.ConfirmWinnerResponse(false, "Item not found");
+            System.out.println("[AUCTION HOUSE] ERROR: Item " + itemId + " not found (may have been already sold)");
+            return new AuctionMessages.ConfirmWinnerResponse(false, "Item not found or already sold");
         }
 
         AuctionItem item = manager.getItem();
@@ -320,6 +330,13 @@ public class AuctionHouse {
                     + " is not the winner (winner is " + item.currentBidderAccountNumber + ")");
             return new AuctionMessages.ConfirmWinnerResponse(
                     false, "You are not the winning bidder");
+        }
+        
+        // Double-check the item is still there - another thread might have removed it
+        // between the first check and now (though unlikely with synchronized method)
+        if (!items.containsKey(itemId)) {
+            System.out.println("[AUCTION HOUSE] ERROR: Item " + itemId + " was removed during confirmation");
+            return new AuctionMessages.ConfirmWinnerResponse(false, "Item was removed during confirmation");
         }
 
         double soldPrice = item.currentBid;
@@ -331,48 +348,49 @@ public class AuctionHouse {
         // Release funds for all losers BEFORE removing item
         manager.releaseLoserFunds(winnerAccount);
 
-        System.out.println("[AUCTION HOUSE] Step 2: Logging sale...");
+        System.out.println("[AUCTION HOUSE] Step 2: Broadcasting ITEM_SOLD to all agents...");
 
-        // Log the sale
+        // Broadcast ITEM_SOLD to ALL agents so they can remove it from their view
+        // Do this BEFORE removing item to ensure all agents are notified
+        broadcastToAllAgents(itemId, "ITEM_SOLD",
+                "Item " + itemId + " (" + itemDesc + ") sold to Agent " + winnerAccount
+                        + " for $" + String.format("%.2f", soldPrice));
+
+        System.out.println("[AUCTION HOUSE] Step 3: Removing item from auction...");
+
+        // Remove the item from the map BEFORE calling callback
+        // This ensures refreshItems() won't see the item
+        items.remove(itemId);
+
+        System.out.println("[AUCTION HOUSE] Step 4: Adding replacement item...");
+        
+        // Add a new item to replace the sold one (as per requirements)
+        addNewItem();
+        System.out.println("[AUCTION HOUSE] ✓ New item added to replace sold item");
+
+        System.out.println("[AUCTION HOUSE] Step 5: Logging sale and refreshing UI...");
+
+        // Log the sale AFTER removing item so refreshItems() won't see it
         if (callback != null) {
             callback.onItemSold(itemId, itemDesc, winnerAccount, soldPrice);
         }
 
-        System.out.println("[AUCTION HOUSE] Step 3: Broadcasting ITEM_SOLD to all agents...");
-
-        // Broadcast ITEM_SOLD to ALL agents so they can remove it from their view
-        broadcastToAllAgents(itemId, "ITEM_SOLD",
-                "Item " + itemId + " (" + itemDesc + ") sold to Agent " + winnerAccount
-                        + " for $" + String.format("%.2f", soldPrice));
-
-        System.out.println("[AUCTION HOUSE] Step 4: Removing item from auction...");
-
-        // Remove the item from the map
-        items.remove(itemId);
-
-        System.out.println("[AUCTION HOUSE] Step 5: Shutting down item manager...");
+        System.out.println("[AUCTION HOUSE] Step 6: Shutting down item manager...");
 
         // Shut down the timer executor
         manager.shutdown();
 
-        //  CREATE RESPONSE FIRST (before broadcasting)
+        // Create response
         AuctionMessages.ConfirmWinnerResponse response =
                 new AuctionMessages.ConfirmWinnerResponse(
                         true, "Item purchased and removed from auction");
-
-        //  NOW broadcast to all agents (AFTER response is ready to return)
-        System.out.println("[AUCTION HOUSE] Step 5: Broadcasting ITEM_SOLD to all agents...");
-        broadcastToAllAgents(itemId, "ITEM_SOLD",
-                "Item " + itemId + " (" + itemDesc + ") sold to Agent " + winnerAccount
-                        + " for $" + String.format("%.2f", soldPrice));
 
         System.out.println("[AUCTION HOUSE] ✓ Item " + itemId + " sold to agent "
                 + winnerAccount + " for $" + soldPrice);
         System.out.println("[AUCTION HOUSE] ✓ Item removed from auction list");
         System.out.println("[AUCTION HOUSE] ========================================");
 
-        return new AuctionMessages.ConfirmWinnerResponse(
-                true, "Item purchased and removed from auction");
+        return response;
     }
 
     /**
@@ -506,6 +524,8 @@ public class AuctionHouse {
         if (manager != null) {
             if (manager.getItem().currentBidderAccountNumber == -1) {
                 items.remove(itemId);
+                // Shut down the timer executor to prevent resource leak
+                manager.shutdown();
                 return true;
             }
         }

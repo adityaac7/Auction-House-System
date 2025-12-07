@@ -124,6 +124,11 @@ public class Bank {
             return new BankMessages.BlockFundsResponse(false, "Account not found");
         }
 
+        // Validate amount is positive and finite
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            return new BankMessages.BlockFundsResponse(false, "Amount must be a positive finite number");
+        }
+
         // Delegate to the thread-safe method in BankAccount
         boolean success = account.blockFunds(amount);
 
@@ -152,6 +157,11 @@ public class Bank {
             return new BankMessages.UnblockFundsResponse(false, "Account not found");
         }
 
+        // Validate amount is positive and finite
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            return new BankMessages.UnblockFundsResponse(false, "Amount must be a positive finite number");
+        }
+
         account.unblockFunds(amount);
         System.out.println("[BANK] Unblocked $" + amount + " for Acct " + accountNumber);
         return new BankMessages.UnblockFundsResponse(true, "Funds unblocked");
@@ -175,6 +185,11 @@ public class Bank {
 
         if (from == null || to == null) {
             return new BankMessages.TransferFundsResponse(false, "Account not found");
+        }
+
+        // Validate amount is positive and finite
+        if (amount <= 0 || Double.isNaN(amount) || Double.isInfinite(amount)) {
+            return new BankMessages.TransferFundsResponse(false, "Amount must be a positive finite number");
         }
 
         // 1. Withdraw from sender (must be blocked first)
