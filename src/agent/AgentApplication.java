@@ -21,15 +21,14 @@ import javafx.beans.property.SimpleStringProperty;
 import javafx.beans.property.SimpleDoubleProperty;
 
 /**
- * JavaFX GUI for the Agent (Bidder)
- * Includes: proper error handling, type safety, auto-refresh,
- * exit prevention with unresolved bids, command-line support, and "My Purchases" view.
- *
- * Command-line usage:
- *   java -jar AgentApplication.jar [-n name] [-b balance] [-bh host] [-bp port]
+ * JavaFX GUI for an auction agent.
+ * <p>
+ * The window lets a user connect to the bank, browse auction houses and items,
+ * place bids, and view purchases and balances.
  */
 public class AgentApplication extends Application {
 
+    /** Handles communication with the bank and auction houses. */
     private Agent agent;
 
     private TextArea logArea;
@@ -51,8 +50,9 @@ public class AgentApplication extends Application {
     private String cmdBankPort = null;
 
     /**
-     * Initialize method called before start()
-     * Processes command-line arguments
+     * Parses command-line arguments before the JavaFX stage is created.
+     * Recognised flags:
+     * -n / --name, -b / --balance, -bh / --bank-host, -bp / --bank-port, -h / --help.
      */
     @Override
     public void init() {
@@ -77,7 +77,6 @@ public class AgentApplication extends Application {
             }
         }
 
-        // Log command-line parameters if provided
         if (cmdAgentName != null || cmdBalance != null || cmdBankHost != null || cmdBankPort != null) {
             System.out.println("[AGENT GUI] Command-line parameters detected:");
             if (cmdAgentName != null) System.out.println("  Name: " + cmdAgentName);
@@ -88,7 +87,7 @@ public class AgentApplication extends Application {
     }
 
     /**
-     * Print usage information
+     * Prints usage information for the agent GUI command-line options.
      */
     private void printUsage() {
         System.out.println("Usage: java -jar AgentApplication.jar [options]");
@@ -106,6 +105,11 @@ public class AgentApplication extends Application {
         System.out.println("  java -jar AgentApplication.jar -n Bob -bh 192.168.1.100 -bp 9999");
     }
 
+    /**
+     * Builds the main window, hooks the close behaviour, and shows the login dialog.
+     *
+     * @param primaryStage main JavaFX stage
+     */
     @Override
     public void start(Stage primaryStage) {
         primaryStage.setTitle("Distributed Auction - Agent");
@@ -114,22 +118,18 @@ public class AgentApplication extends Application {
 
         BorderPane root = new BorderPane();
 
-        // Top panel with agent info
         VBox topPanel = createTopPanel();
         root.setTop(topPanel);
 
-        // Center panel with items, purchases, and bidding
         HBox centerPanel = createCenterPanel();
         root.setCenter(centerPanel);
 
-        // Bottom panel with log
         VBox bottomPanel = createBottomPanel();
         root.setBottom(bottomPanel);
 
         Scene scene = new Scene(root);
         primaryStage.setScene(scene);
 
-        // Prevent exit while there are unresolved bids (blocked funds > 0)
         primaryStage.setOnCloseRequest(event -> {
             if (agent != null && agent.getBlockedFunds() > 0) {
                 showError("Cannot exit",
@@ -148,10 +148,14 @@ public class AgentApplication extends Application {
 
         primaryStage.show();
 
-        // Show login dialog with command-line defaults
         showLoginDialog();
     }
 
+    /**
+     * Creates the top panel showing the agent's balances.
+     *
+     * @return a VBox for the top section
+     */
     private VBox createTopPanel() {
         VBox vbox = new VBox(10);
         vbox.setPadding(new Insets(10));
@@ -188,6 +192,12 @@ public class AgentApplication extends Application {
         return vbox;
     }
 
+    /**
+     * Creates the center area with auction-house selection, items, purchases,
+     * and bid controls.
+     *
+     * @return an HBox for the center section
+     */
     private HBox createCenterPanel() {
         HBox hbox = new HBox(10);
         hbox.setPadding(new Insets(10));
@@ -351,6 +361,11 @@ public class AgentApplication extends Application {
         return hbox;
     }
 
+    /**
+     * Creates the bottom area with the activity log.
+     *
+     * @return a VBox for the bottom section
+     */
     private VBox createBottomPanel() {
         VBox vbox = new VBox(5);
         vbox.setPadding(new Insets(10));
@@ -369,7 +384,8 @@ public class AgentApplication extends Application {
     }
 
     /**
-     * Show login dialog with command-line parameters pre-filled
+     * Shows the login dialog, creates the agent on success, and wires
+     * the UI callbacks and initial auction-house data.
      */
     private void showLoginDialog() {
         Dialog<String[]> dialog = new Dialog<>();
@@ -383,22 +399,18 @@ public class AgentApplication extends Application {
 
         TextField nameField = new TextField();
         nameField.setPromptText("Agent Name");
-        // Use command-line parameter if provided, otherwise default
         nameField.setText(cmdAgentName != null ? cmdAgentName : "Agent1");
 
         TextField balanceField = new TextField();
         balanceField.setPromptText("Initial Balance");
-        // Use command-line parameter if provided, otherwise default
         balanceField.setText(cmdBalance != null ? cmdBalance : "10000");
 
         TextField bankHostField = new TextField();
         bankHostField.setPromptText("Bank Host");
-        // Use command-line parameter if provided, otherwise default
         bankHostField.setText(cmdBankHost != null ? cmdBankHost : "localhost");
 
         TextField bankPortField = new TextField();
         bankPortField.setPromptText("Bank Port");
-        // Use command-line parameter if provided, otherwise default
         bankPortField.setText(cmdBankPort != null ? cmdBankPort : "5000");
 
         grid.add(new Label("Agent Name:"), 0, 0);
@@ -542,7 +554,6 @@ public class AgentApplication extends Application {
                     }
                 });
 
-                // Load auction houses
                 AuctionHouseInfo[] auctionHouses = agent.getAuctionHouses();
                 auctionHouseCombo.getItems().clear();
                 for (AuctionHouseInfo info : auctionHouses) {
@@ -573,6 +584,10 @@ public class AgentApplication extends Application {
         });
     }
 
+    /**
+     * Loads items for the currently selected auction house into the table.
+     * Network calls run on a background thread; UI is updated on the FX thread.
+     */
     private void loadItems() {
         if (agent == null) {
             setStatusMessage("Please login first", "red");
@@ -644,10 +659,10 @@ public class AgentApplication extends Application {
         }).start();
     }
 
-
-
-
-    // Refresh auction houses dynamically
+    /**
+     * Refreshes the list of auction houses from the bank and updates the combo box.
+     * If the previous selection still exists, it is restored.
+     */
     private void refreshAuctionHouses() {
         if (agent == null) {
             setStatusMessage("Please login first", "red");
@@ -681,8 +696,10 @@ public class AgentApplication extends Application {
         }).start();
     }
 
-    // Place bid with validation and error handling
-    // Place bid with validation and error handling
+    /**
+     * Validates the current selection and bid amount, and places the bid
+     * on a background thread if everything is valid.
+     */
     private void placeBid() {
         if (agent == null) {
             setStatusMessage("Please login first", "red");
@@ -800,21 +817,34 @@ public class AgentApplication extends Application {
         }
     }
 
-
-    // Helper method for logging
+    /**
+     * Appends a timestamped message to the activity log.
+     *
+     * @param message text to append
+     */
     private void log(String message) {
         String timestamp = java.time.LocalTime.now().format(
                 java.time.format.DateTimeFormatter.ofPattern("HH:mm:ss"));
         logArea.appendText("[" + timestamp + "] " + message + "\n");
     }
 
-    // Helper method for status updates
+    /**
+     * Updates the status label text and sets its text fill color.
+     *
+     * @param message status message
+     * @param color   CSS color string, for example "red" or "green"
+     */
     private void setStatusMessage(String message, String color) {
         statusLabel.setText(message);
         statusLabel.setStyle("-fx-text-fill: " + color + ";");
     }
 
-    // Helper method for error dialogs
+    /**
+     * Shows a simple error dialog with the given title and message.
+     *
+     * @param title   dialog title
+     * @param message dialog content
+     */
     private void showError(String title, String message) {
         Alert alert = new Alert(Alert.AlertType.ERROR);
         alert.setTitle(title);
@@ -823,6 +853,11 @@ public class AgentApplication extends Application {
         alert.showAndWait();
     }
 
+    /**
+     * Application entry point.
+     *
+     * @param args command-line arguments
+     */
     public static void main(String[] args) {
         launch(args);
     }
