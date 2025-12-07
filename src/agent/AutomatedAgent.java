@@ -69,7 +69,7 @@ public class AutomatedAgent {
     public AutomatedAgent(String bankHost, int bankPort, double initialBalance,
                           double bidMultiplier, double maxItemBudgetRatio)
             throws IOException, ClassNotFoundException {
-        this.agent = new Agent("AutoBot", initialBalance, bankHost, bankPort);
+        this.agent = new Agent("autoagent", initialBalance, bankHost, bankPort);
         this.random = new Random();
         this.bidMultiplier = bidMultiplier;
         this.maxItemBudgetRatio = maxItemBudgetRatio;
@@ -77,6 +77,39 @@ public class AutomatedAgent {
         this.activeBids = new ConcurrentHashMap<>();
         this.watchList = new ConcurrentHashMap<>();
         this.running = false;
+        
+        // Register callback to clean up tracking when items are sold
+        agent.setUICallback(new Agent.AgentUICallback() {
+            @Override
+            public void onBalanceUpdated(double total, double available, double blocked) {
+                // Balance updates are handled automatically by the agent
+                // No action needed here for automated bidding
+            }
+
+            @Override
+            public void onItemsUpdated(AuctionItem[] items) {
+                // Item updates are processed in the main bidding loop
+                // No action needed here
+            }
+
+            @Override
+            public void onBidStatusChanged(int itemId, String status, String message) {
+                // Clean up tracking when item is sold or we're outbid
+                if ("ITEM_SOLD".equals(status) || "OUTBID".equals(status)) {
+                    activeBids.remove(itemId);
+                    watchList.remove(itemId);
+                }
+            }
+
+            @Override
+            public void onPurchasesUpdated(java.util.List<Agent.Purchase> purchases) {
+                // Clean up any items we won
+                for (Agent.Purchase purchase : purchases) {
+                    activeBids.remove(purchase.itemId);
+                    watchList.remove(purchase.itemId);
+                }
+            }
+        });
     }
 
     /**
@@ -98,6 +131,7 @@ public class AutomatedAgent {
      * Main bidding loop with timing-aware strategy.
      */
     private void runBiddingLoop() {
+        int iterationCount = 0;
         while (running) {
             try {
                 // Refresh auction houses
@@ -114,6 +148,12 @@ public class AutomatedAgent {
                 // Process items with timing strategy
                 processItemsStrategically(auctionHousesArray);
 
+                // Periodically clean up stale watchlist items (every 10 iterations)
+                iterationCount++;
+                if (iterationCount % 10 == 0) {
+                    cleanupStaleWatchlist();
+                }
+
                 // Variable sleep based on activity (1-2 seconds)
                 Thread.sleep(1000 + random.nextInt(1000));
 
@@ -122,8 +162,22 @@ public class AutomatedAgent {
                 break;
             } catch (Exception e) {
                 System.err.println("[AUTO AGENT] Error: " + e.getMessage());
+                e.printStackTrace();
             }
         }
+    }
+    
+    /**
+     * Removes stale items from the watchlist that are no longer available.
+     * This prevents memory leaks from items that were sold but not properly cleaned up.
+     */
+    private void cleanupStaleWatchlist() {
+        long currentTime = System.currentTimeMillis();
+        watchList.entrySet().removeIf(entry -> {
+            AuctionItem item = entry.getValue();
+            // Remove if auction ended more than 10 seconds ago
+            return item.auctionEndTime > 0 && item.auctionEndTime < currentTime - 10000;
+        });
     }
 
     /**
@@ -161,10 +215,10 @@ public class AutomatedAgent {
      * Processes a single item with timing-aware bidding strategy.
      *
      * <p>Strategy:
+     * - Only bids if there is already another bidder (no first bids)
      * - If timer > 5 seconds: Add to watchlist, don't bid yet (sniping)
      * - If timer <= 5 seconds: Execute snipe bid
      * - If already winning: Monitor but don't increase bid
-     * - If no bids yet: Occasionally place first bid to start timer
      */
     private void processItemWithTiming(AuctionHouseInfo ahInfo,
                                        AuctionItem item,
@@ -175,16 +229,15 @@ public class AutomatedAgent {
                 return;
             }
 
-            // Calculate time remaining
-            long timeRemaining = item.auctionEndTime - System.currentTimeMillis();
-
-            // If no timer started yet (no bids), occasionally place strategic first bid
+            // Only bid if there is already another bidder
+            // Skip items with no bids (auctionEndTime == 0 or currentBid <= 0)
             if (item.auctionEndTime == 0 || item.currentBid <= 0) {
-                if (random.nextDouble() < 0.3) { // 30% chance to start bidding
-                    placeStrategicFirstBid(ahInfo, item, maxBidPerItem);
-                }
+                // No bids yet - wait for someone else to bid first
                 return;
             }
+
+            // Calculate time remaining
+            long timeRemaining = item.auctionEndTime - System.currentTimeMillis();
 
             // SNIPING STRATEGY: Only bid in last few seconds
             if (timeRemaining > snipeWindowMs) {
@@ -199,32 +252,6 @@ public class AutomatedAgent {
         } catch (Exception e) {
             System.err.println("[AUTO AGENT] Error processing item "
                     + item.itemId + ": " + e.getMessage());
-        }
-    }
-
-    /**
-     * Places strategic first bid - slightly above minimum to start timer.
-     */
-    private void placeStrategicFirstBid(AuctionHouseInfo ahInfo,
-                                        AuctionItem item,
-                                        double maxBidPerItem) {
-        try {
-            // Bid just above minimum
-            double bidAmount = item.minimumBid * (1.0 + random.nextDouble() * 0.1);
-
-            if (bidAmount > maxBidPerItem) {
-                return;
-            }
-
-            boolean success = agent.placeBid(ahInfo.auctionHouseId, item.itemId, bidAmount);
-            if (success) {
-                activeBids.put(item.itemId, bidAmount);
-                System.out.println("[AUTO AGENT] First bid: $" +
-                        String.format("%.2f", bidAmount) +
-                        " on item " + item.itemId);
-            }
-        } catch (IOException | ClassNotFoundException e) {
-            System.err.println("[AUTO AGENT] Failed first bid: " + e.getMessage());
         }
     }
 
@@ -261,8 +288,8 @@ public class AutomatedAgent {
     /**
      * Calculates optimal snipe bid amount.
      *
-     * <p>Uses smaller increment than normal bidding to avoid
-     * triggering aggressive counter-bids.
+     * <p>Uses the configured bidMultiplier to determine bid increments,
+     * with some randomization to avoid predictable patterns.
      */
     private double calculateSnipeBid(AuctionItem item, double maxBidPerItem) {
         if (item == null) {
@@ -272,12 +299,19 @@ public class AutomatedAgent {
         double bidAmount;
 
         if (item.currentBid <= 0) {
-            // First bid: near minimum
+            // First bid: near minimum with small random variation
             bidAmount = item.minimumBid * (1.0 + random.nextDouble() * 0.15);
         } else {
-            // Snipe: smaller increment (5-10% instead of multiplier)
-            double increment = item.currentBid * (0.05 + random.nextDouble() * 0.05);
-            bidAmount = item.currentBid + increment;
+            // Snipe: use bidMultiplier with some randomization
+            // Apply multiplier with small random variation (±2%)
+            double multiplierVariation = bidMultiplier + (random.nextDouble() - 0.5) * 0.04;
+            bidAmount = item.currentBid * multiplierVariation;
+            
+            // Ensure minimum increment of at least 1% to be competitive
+            double minIncrement = item.currentBid * 0.01;
+            if (bidAmount - item.currentBid < minIncrement) {
+                bidAmount = item.currentBid + minIncrement;
+            }
         }
 
         return Math.min(bidAmount, maxBidPerItem);
@@ -303,26 +337,81 @@ public class AutomatedAgent {
 
     /**
      * Main entry point for automated agent.
+     * 
+     * <p>Supports running with default parameters (no arguments) or custom parameters.
+     * Default values:
+     * <ul>
+     *   <li>bankHost: "localhost"</li>
+     *   <li>bankPort: 9999</li>
+     *   <li>initialBalance: 10000.0</li>
+     *   <li>bidMultiplier: 1.08</li>
+     *   <li>maxItemBudgetRatio: 0.3</li>
+     * </ul>
      *
-     * @param args command line arguments: bankHost bankPort initialBalance [bidMultiplier] [maxItemBudgetRatio]
+     * @param args optional command line arguments: [bankHost] [bankPort] [initialBalance] [bidMultiplier] [maxItemBudgetRatio]
      */
     public static void main(String[] args) {
-        if (args.length < 3) {
-            System.out.println("Usage: java AutomatedAgent <bankHost> <bankPort> <initialBalance> [bidMultiplier] [maxItemBudgetRatio]");
-            return;
+        // Default values
+        String bankHost = "localhost";
+        int bankPort = 9999; // Default bank port
+        double initialBalance = 10000.0;
+        double bidMultiplier = 1.08;
+        double maxItemBudgetRatio = 0.3;
+
+        // Parse arguments if provided
+        if (args.length > 0) {
+            bankHost = args[0];
+        }
+        if (args.length > 1) {
+            try {
+                bankPort = Integer.parseInt(args[1]);
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid bank port: " + args[1] + ". Using default: " + bankPort);
+            }
+        }
+        if (args.length > 2) {
+            try {
+                initialBalance = Double.parseDouble(args[2]);
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid initial balance: " + args[2] + ". Using default: " + initialBalance);
+            }
+        }
+        if (args.length > 3) {
+            try {
+                bidMultiplier = Double.parseDouble(args[3]);
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid bid multiplier: " + args[3] + ". Using default: " + bidMultiplier);
+            }
+        }
+        if (args.length > 4) {
+            try {
+                maxItemBudgetRatio = Double.parseDouble(args[4]);
+            } catch (NumberFormatException e) {
+                System.err.println("Invalid max item budget ratio: " + args[4] + ". Using default: " + maxItemBudgetRatio);
+            }
         }
 
-        try {
-            String bankHost = args[0];
-            int bankPort = Integer.parseInt(args[1]);
-            double initialBalance = Double.parseDouble(args[2]);
-            double bidMultiplier = args.length > 3 ? Double.parseDouble(args[3]) : 1.08;
-            double maxItemBudgetRatio = args.length > 4 ? Double.parseDouble(args[4]) : 0.3;
+        // Show configuration
+        if (args.length == 0) {
+            System.out.println("[AUTO AGENT] Starting with default parameters:");
+        } else {
+            System.out.println("[AUTO AGENT] Starting with configuration:");
+        }
+        System.out.println("  Bank Host: " + bankHost);
+        System.out.println("  Bank Port: " + bankPort);
+        System.out.println("  Initial Balance: $" + String.format("%.2f", initialBalance));
+        System.out.println("  Bid Multiplier: " + bidMultiplier);
+        System.out.println("  Max Item Budget Ratio: " + maxItemBudgetRatio);
+        System.out.println();
 
+        try {
             AutomatedAgent autoAgent = new AutomatedAgent(
                     bankHost, bankPort, initialBalance, bidMultiplier, maxItemBudgetRatio);
 
             autoAgent.start();
+
+            System.out.println("[AUTO AGENT] Running... Press Ctrl+C to stop.");
+            System.out.println();
 
             // Keep running until interrupted
             Thread.sleep(Long.MAX_VALUE);
@@ -331,6 +420,7 @@ public class AutomatedAgent {
         } catch (IOException | ClassNotFoundException e) {
             System.err.println("[AUTO AGENT] Failed to initialize: " + e.getMessage());
             e.printStackTrace();
+            System.exit(1);
         }
     }
 }

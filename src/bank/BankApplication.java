@@ -64,7 +64,7 @@ public class BankApplication extends Application {
         Scene scene = new Scene(root);
         primaryStage.setScene(scene);
 
-        // FIXED: Removed auto-start - let user start manually
+        // Removed auto-start - let user start manually
         // startServer();
 
         primaryStage.setOnCloseRequest(event -> {
@@ -96,7 +96,7 @@ public class BankApplication extends Application {
         Button startButton = new Button("Start Server");
         Button stopButton = new Button("Stop Server");
 
-        // FIXED: Correct initial button states
+        // Correct initial button states
         startButton.setDisable(false);
         stopButton.setDisable(true);
         portField.setDisable(false);

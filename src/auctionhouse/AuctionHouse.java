@@ -493,7 +493,7 @@ public class AuctionHouse {
         double minimumBid = itemMinimumBids[
                 Math.abs(itemId % itemMinimumBids.length)];
         AuctionItem item = new AuctionItem(auctionHouseId, itemId, description, minimumBid);
-        AuctionItemManager manager = new AuctionItemManager(item, bankClient, this);
+        AuctionItemManager manager = new AuctionItemManager(item, this);
         items.put(itemId, manager);
     }
 
@@ -506,7 +506,7 @@ public class AuctionHouse {
     public synchronized void addNewItem(String description, double minimumBid) {
         int itemId = nextItemId++;
         AuctionItem item = new AuctionItem(auctionHouseId, itemId, description, minimumBid);
-        AuctionItemManager manager = new AuctionItemManager(item, bankClient, this);
+        AuctionItemManager manager = new AuctionItemManager(item, this);
         items.put(itemId, manager);
     }
 

@@ -174,31 +174,53 @@ public class AuctionHouseApplication extends Application {
             }
 
             if (auctionHouse != null && auctionHouse.hasActiveBids()) {
-                Alert alert = new Alert(Alert.AlertType.WARNING);
-                alert.setTitle("Active Bids");
-                alert.setHeaderText("Cannot close auction house");
-                alert.setContentText("There are still active bids. Please wait for all auctions to complete.");
-                alert.showAndWait();
-                event.consume();
+                Alert alert = new Alert(Alert.AlertType.CONFIRMATION);
+                alert.setTitle("Active Bids Detected");
+                alert.setHeaderText("There are still active bids");
+                alert.setContentText("There are items with active bids. Do you want to force close anyway?\n\n" +
+                        "Note: This may leave auctions in an incomplete state if agents are not available to confirm purchases.");
+                
+                ButtonType forceClose = new ButtonType("Force Close");
+                ButtonType cancel = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+                alert.getButtonTypes().setAll(forceClose, cancel);
+                
+                alert.showAndWait().ifPresent(buttonType -> {
+                    if (buttonType == forceClose) {
+                        // User confirmed force close - proceed with shutdown
+                        shutdownAuctionHouse();
+                        Platform.exit();
+                    } else {
+                        // User cancelled - prevent shutdown
+                        event.consume();
+                    }
+                });
                 return;
             }
 
-            if (server != null) {
-                try {
-                    BankMessages.DeregisterRequest request =
-                            new BankMessages.DeregisterRequest(
-                                    server.getAuctionHouseAccountNumber(), "AUCTION_HOUSE");
-                    server.deregisterFromBank(request);
-                    log("Deregistered from bank");
-                } catch (Exception e) {
-                    log("Error deregistering: " + e.getMessage());
-                }
-                server.stop();
-            }
+            shutdownAuctionHouse();
             Platform.exit();
         });
 
         primaryStage.show();
+    }
+
+    /**
+     * Handles the shutdown process for the auction house server.
+     * Deregisters from the bank and stops the server.
+     */
+    private void shutdownAuctionHouse() {
+        if (server != null) {
+            try {
+                BankMessages.DeregisterRequest request =
+                        new BankMessages.DeregisterRequest(
+                                server.getAuctionHouseAccountNumber(), "AUCTION_HOUSE");
+                server.deregisterFromBank(request);
+                log("Deregistered from bank");
+            } catch (Exception e) {
+                log("Error deregistering: " + e.getMessage());
+            }
+            server.stop();
+        }
     }
 
     /**
@@ -223,7 +245,7 @@ public class AuctionHouseApplication extends Application {
         connectionGrid.setVgap(5);
 
         bankHostField = new TextField("localhost");
-        bankPortField = new TextField("5000");
+        bankPortField = new TextField("9999");
         auctionPortField = new TextField("0");
 
         connectionGrid.add(new Label("Bank Host:"), 0, 0);

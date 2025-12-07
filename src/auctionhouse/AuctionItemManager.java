@@ -2,7 +2,6 @@ package auctionhouse;
 
 import common.AuctionItem;
 import common.Message;
-import common.NetworkClient;
 import messages.BankMessages;
 
 
@@ -38,9 +37,6 @@ public class AuctionItemManager {
     /** The auction item being managed. */
     private AuctionItem item;
 
-    /** Network client for communicating with the bank server. */
-    private NetworkClient bankClient;
-
     /** Reference to the parent auction house for notifications and callbacks. */
     private AuctionHouse auctionHouse;
 
@@ -64,14 +60,10 @@ public class AuctionItemManager {
      * until the first bid is placed.
      *
      * @param item the auction item to manage
-     * @param bankClient the network client for bank communication
-     * @param auctionHouse the parent auction house for notifications
+     * @param auctionHouse the parent auction house for notifications and bank communication
      */
-    public AuctionItemManager(AuctionItem item,
-                              NetworkClient bankClient,
-                              AuctionHouse auctionHouse) {
+    public AuctionItemManager(AuctionItem item, AuctionHouse auctionHouse) {
         this.item = item;
-        this.bankClient = bankClient;
         this.auctionHouse = auctionHouse;
         this.timerExecutor = Executors.newSingleThreadScheduledExecutor();
         this.currentTimer = null;

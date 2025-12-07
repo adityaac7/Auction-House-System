@@ -96,7 +96,7 @@ public class AgentApplication extends Application {
         System.out.println("  -n, --name <name>        Agent name (default: Agent1)");
         System.out.println("  -b, --balance <amount>   Initial balance (default: 10000)");
         System.out.println("  -bh, --bank-host <host>  Bank hostname (default: localhost)");
-        System.out.println("  -bp, --bank-port <port>  Bank port (default: 5000)");
+        System.out.println("  -bp, --bank-port <port>  Bank port (default: 9999)");
         System.out.println("  -h, --help               Show this help message");
         System.out.println();
         System.out.println("Examples:");
@@ -411,7 +411,7 @@ public class AgentApplication extends Application {
 
         TextField bankPortField = new TextField();
         bankPortField.setPromptText("Bank Port");
-        bankPortField.setText(cmdBankPort != null ? cmdBankPort : "5000");
+        bankPortField.setText(cmdBankPort != null ? cmdBankPort : "9999");
 
         grid.add(new Label("Agent Name:"), 0, 0);
         grid.add(nameField, 1, 0);

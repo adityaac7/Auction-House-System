@@ -11,7 +11,7 @@ import java.net.Socket;
  */
 public class BankServer {
 
-    public static final int DEFAULT_PORT = 5000;
+    public static final int DEFAULT_PORT = 9999;
 
     private Bank bank;
     private NetworkServer networkServer;
