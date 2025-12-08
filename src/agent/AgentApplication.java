@@ -608,13 +608,13 @@ public class AgentApplication extends Application {
                 boolean needsConnection = !agent.isConnectedToAuctionHouse(selectedHouse.auctionHouseId);
                 
                 if (needsConnection) {
-                    Platform.runLater(() -> log("Connecting to Auction House "
-                            + selectedHouse.auctionHouseId + "..."));
-                    
-                    agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
-                    agent.startListeningForNotifications(selectedHouse.auctionHouseId);
-                    
-                    Thread.sleep(300); // Let connection stabilize
+                Platform.runLater(() -> log("Connecting to Auction House "
+                        + selectedHouse.auctionHouseId + "..."));
+
+                agent.connectToAuctionHouse(selectedHouse.auctionHouseId);
+                agent.startListeningForNotifications(selectedHouse.auctionHouseId);
+
+                Thread.sleep(300); // Let connection stabilize
                 } else {
                     // Connection exists, just ensure listener is running
                     try {

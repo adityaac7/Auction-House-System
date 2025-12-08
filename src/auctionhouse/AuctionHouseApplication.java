@@ -9,6 +9,7 @@ import javafx.application.Platform;
 import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.control.*;
+import javafx.scene.control.ButtonBar.ButtonData;
 import javafx.scene.layout.*;
 import javafx.stage.Stage;
 import javafx.collections.FXCollections;
@@ -181,7 +182,7 @@ public class AuctionHouseApplication extends Application {
                         "Note: This may leave auctions in an incomplete state if agents are not available to confirm purchases.");
                 
                 ButtonType forceClose = new ButtonType("Force Close");
-                ButtonType cancel = new ButtonType("Cancel", ButtonBar.ButtonData.CANCEL_CLOSE);
+                ButtonType cancel = new ButtonType("Cancel", ButtonData.CANCEL_CLOSE);
                 alert.getButtonTypes().setAll(forceClose, cancel);
                 
                 alert.showAndWait().ifPresent(buttonType -> {
