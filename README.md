@@ -1,61 +1,109 @@
 # CS 351 Project 5: Distributed Auction System
 
-### Group Members
+## Group Members
 * **Utshab Niraula**
 * **Sushant Bogati**
 * **Priyash Chandara**
 * **Aditya Chauhan**
 
 ## Project Overview
-For Project 5, our group is building a distributed auction system. The basic idea is to have three different programs that talk to each other over the network using TCP sockets:
+For Project 5, our group built a distributed auction system using a strict Client-Server architecture. The system consists of three distinct nodes that communicate over the network using TCP sockets and Java Object Serialization:
 
-1.  **Bank Server:** This runs the whole time and keeps track of everyone's money and accounts. It also handles the Auction Houses registering. We are making sure it's thread-safe so money doesn't get messed up.
-2.  **Auction House:** This is kind of in the middle. It acts like a client when it talks to the Bank (to check funds), but it acts like a server for the Agents (bidders). It holds the items and runs the auctions.
-3.  **Agent:** This is the program the user runs to bid on things. It connects to the Bank to get an account and then connects to an Auction House to start bidding.
+1.  **Bank Server:** The central authority. It maintains user accounts, manages balances in a thread-safe manner, and handles fund transfers between Agents and Auction Houses.
+2.  **Auction House:** Acts as a hybrid node. It is a client to the Bank (to verify funds) but a server to Agents (bidders). It manages items, runs 30-second countdown timers, and processes bids.
+3.  **Agent:** The client program used by bidders. It connects to the Bank to establish an identity and then connects to various Auction Houses to view items and place bids.
 
-## Who Is Doing What
-We split the work up by component to keep things organized:
+---
 
-* **Utshab Niraula (Bank Backend):** I am working on the Bank. So far, I've implemented the `Bank` logic, the thread-safe `BankAccount` class, and the `BankClientHandler` to handle incoming connections. I also defined the `BankMessages` protocol so everyone knows how to talk to the bank.
-* **Sushant Bogati (Agent Client):** Sushant is working on the Agent logic. He is building the client that connects to the bank, handles the user's balance, and eventually will handle the bidding loop.
-* **Priyash Chandara (Auction House Server):** Priyash is handling the Auction House logic. He is working on the `ItemManager` (locking items for bids) and the `AuctionHouseServer` that listens for Agents to connect.
-* **Aditya Chauhan (GUI & Frontend):** Aditya is in charge of the visual part. Once our backend logic is solid, he is going to build the JavaFX applications (`BankApplication`, `AgentApplication`, etc.) so we have a nice interface instead of just console text.
+## Division of Labor
+We divided the project implementation by component:
+
+* **Utshab Niraula (Bank Component):** Worked on the entire Bank backend. Responsible for implementing the core Bank logic, the thread-safe `BankAccount` class using synchronized methods, and the `BankClientHandler` to manage incoming network connections. Also defined the protocol in `BankMessages`.
+* **Sushant Bogati (Agent Component):** Worked on the Agent logic. Built the client-side backend (`Agent.java`) that maintains local state and handles asynchronous notifications (like "OUTBID" or "WINNER") using listener threads. Also implemented the `AutomatedAgent` which uses specific strategies like budget management and sniping.
+* **Priyash Chandara (Auction House Component):** Worked on the Auction House logic. Responsible for the `AuctionHouseServer` and `AuctionItemManager`. Implemented the logic to auto-detect the machine's public IP address to solve lab network connectivity issues and handled the 30-second countdown timers for items.
+* **Aditya Chauhan (GUI & Frontend):** Worked on the Visual Interface. Responsible for developing the JavaFX applications (`BankApplication`, `AuctionHouseApplication`, `AgentApplication`) that wrap the backend logic, providing a user-friendly interface for monitoring logs, managing items, and bidding.
+
+---
 
 ## Architecture & Design
-The system is built on a strict Client-Server model using Java Sockets. Thread safety is a core priority:
-* **Bank:** Uses `synchronized` methods in `BankAccount.java` to prevent race conditions when blocking or transferring funds.
-* **Auction House:** Uses `ReentrantLocks` on items to ensure two people can't bid on the same item at the exact same microsecond.
+The system handles complex concurrency issues inherent in distributed systems:
+
+* **Communication:** We use `ObjectInputStream` and `ObjectOutputStream` to send serialized `Message` objects (defined in the messages package) rather than parsing raw text strings.
+* **Thread Safety:**
+    * **Bank:** Uses synchronized methods in `BankAccount.java` to prevent race conditions (e.g., ensuring a user cannot double-spend funds across two auction houses).
+    * **Auction House:** Uses `ConcurrentHashMap` and synchronized blocks in `AuctionItemManager` to ensure bids are processed sequentially.
+* **Timers:** The Auction House uses a `ScheduledExecutorService` to manage bid timers. Every time a valid bid is placed, the timer resets to 30 seconds.
+* **Network:** We implemented a `NetworkServer` wrapper that dynamically finds the machine's LAN IP address so the Auction House registers correctly with the Bank even on the university Linux machines.
+
+---
 
 ## Directory Structure
-We recently refactored the code into packages to keep it clean:
+The project is organized into specific packages to separate concerns:
 
 ```text
 CS351-Auction/
 ├── README.md           # This file
-├── .gitignore          
-├── design/             
-│   └── cs351project5_design.pdf
-└── src/                
-    ├── bank/           # Bank logic & Server
+├── src/                
+    ├── bank/           # Bank Server Logic & GUI
     │   ├── Bank.java
     │   ├── BankServer.java
-    │   └── BankClientHandler.java
-    ├── agent/          # Agent logic
-    │   └── Agent.java
-    ├── auctionhouse/   # Auction House logic
+    │   ├── BankClientHandler.java
+    │   ├── BankAccount.java
+    │   └── BankApplication.java
+    ├── auctionhouse/   # Auction House Logic & GUI
     │   ├── AuctionHouse.java
-    │   └── ItemManager.java
-    ├── common/         # Shared files (NetworkServer, AuctionItem)
-    └── messages/       # Protocol definitions (BankMessages, etc.)
+    │   ├── AuctionHouseServer.java
+    │   ├── AuctionItemManager.java
+    │   ├── AuctionHouseClientHandler.java
+    │   └── AuctionHouseApplication.java
+    ├── agent/          # Agent Logic, Bot & GUI
+    │   ├── Agent.java
+    │   ├── AutomatedAgent.java
+    │   └── AgentApplication.java
+    ├── common/         # Shared Network Wrappers & Data Objects
+    │   ├── NetworkClient.java
+    │   ├── NetworkServer.java
+    │   ├── AuctionItem.java
+    │   └── AuctionHouseInfo.java
+    └── messages/       # Protocol Definitions
+        ├── Message.java
+        ├── BankMessages.java
+        └── AuctionMessages.java
+
 
 ```
 
-## Current Status
-* Done:
-* Bank backend is functional (Accounts, logic, message routing).
-* Network protocols are defined.
-* Project structure is organized into packages.
+## How to Run
 
-* Doing:
-* Connecting the Agent and Auction House logic to the network using the new package structure.
-* Drafting the JavaFX GUI screens.
+The system must be started in a specific order.
+
+1. Start the Bank
+
+* Run bank.BankApplication.
+* Click "Start Server" (defaults to port 9999).
+* Note the IP address of the machine running the bank.
+
+2. Start an Auction House
+
+* Run auctionhouse.AuctionHouseApplication.
+* Enter the Bank's Hostname and Port.
+* Click "Start Server". The Auction House will automatically register itself with the Bank and begin listening for 
+  Agents.
+
+3. Start an Agent (Manual)
+
+* Run agent.AgentApplication.
+* Enter the Bank's Host/Port.
+* Select an Agent Name and Initial Balance.
+* Once connected, select an Auction House from the dropdown to load items and place bids.
+
+4. Start an Agent (Automated Bot)
+
+* You can run the automated bot from the command line to simulate traffic. It creates a bot that bids 1.15x the 
+current price and stops if it runs low on funds.
+
+# Example Command
+```bash 
+
+java -cp out/production/project agent.AutomatedAgent -n AutoBot -b 10000 -bh localhost -bp 9999
+
