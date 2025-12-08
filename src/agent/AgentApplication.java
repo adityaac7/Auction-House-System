@@ -281,7 +281,9 @@ public class AgentApplication extends Application {
             }
         });
 
-        itemsTable.getColumns().addAll(itemIdCol, descCol, minBidCol, currentBidCol);
+        @SuppressWarnings("unchecked")
+        TableColumn<AuctionItem, ?>[] columns1 = new TableColumn[] {itemIdCol, descCol, minBidCol, currentBidCol};
+        itemsTable.getColumns().addAll(columns1);
 
         // My Purchases table
         Label purchasesLabel = new Label("My Purchases:");
@@ -312,7 +314,9 @@ public class AgentApplication extends Application {
             }
         });
 
-        purchasesTable.getColumns().addAll(pHouseCol, pItemCol, pDescCol, pPriceCol);
+        @SuppressWarnings("unchecked")
+        TableColumn<Agent.Purchase, ?>[] columns2 = new TableColumn[] {pHouseCol, pItemCol, pDescCol, pPriceCol};
+        purchasesTable.getColumns().addAll(columns2);
 
         leftPanel.getChildren().addAll(
                 auctionPanel,

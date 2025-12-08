@@ -357,8 +357,10 @@ public class AuctionHouseApplication extends Application {
             }
         });
 
-        itemsTable.getColumns().addAll(itemIdCol, descCol, minBidCol,
-                currentBidCol, bidderCol, timerCol);
+        @SuppressWarnings("unchecked")
+        TableColumn<ItemDisplay, ?>[] columns = new TableColumn[] {itemIdCol, descCol, minBidCol,
+                currentBidCol, bidderCol, timerCol};
+        itemsTable.getColumns().addAll(columns);
 
         HBox itemControls = new HBox(10);
         itemDescriptionField = new TextField();
